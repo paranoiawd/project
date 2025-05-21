@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>0&period; &#xd30c;&#xc77c;</title>
+        <style>
+/* From extension vscode.github */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.vscode-dark img[src$=\#gh-light-mode-only],
+.vscode-light img[src$=\#gh-dark-mode-only] {
+	display: none;
+}
+
+</style>
+        
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/markdown.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/highlight.css">
+<style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+            }
+        </style>
+        <style>
+.task-list-item {
+    list-style-type: none;
+}
+
+.task-list-item-checkbox {
+    margin-left: -20px;
+    vertical-align: middle;
+    pointer-events: none;
+}
+</style>
+        
+    </head>
+    <body class="vscode-body vscode-light">
+        <h1 id="0-파일">0. 파일</h1>
+<ul>
+<li><code>main.cpp</code> : main 함수가 포함된 파일로, 시뮬레이터를 위한 설정 상수와 시뮬레이터 구현이 main 함수 내에 있습니다.</li>
+<li><code>simulator.h</code> : 시뮬레이터의 작동에 필요한 함수, 타입, 클래스 등의 선언이이 있고 최대한 한 파일 내에서 코드를 확인할 수 있도록 대부분의 정의가 작성되어 있습니다.</li>
+<li><code>simulator.cpp</code> : 일부 <code>simulator.h</code>에서 바로 구현할 수 없는 함수와 메서드 정의되어 있습니다.</li>
+<li><code>schedular.h</code> : 실질적으로 <strong>수정해야 할 파일</strong>로 Scheduler 클래스의 기본 선언이 있습니다.</li>
+<li><code>schedular.cpp</code> : 실질적으로 <strong>수정해야 할 파일</strong>로 Scheduler 기본 선언의 구현이 작성되어 있습니다.</li>
+<li><code>CMAKELists.txt</code> : CMake환경을 사용하실경우 사용하시면 됩니다. 다른 환경을 사용하실경우 지우셔도 무방합니다.</li>
+</ul>
+<br>
+<h1 id="1-해야할-것">1. 해야할 것</h1>
+<p><strong>scheduler.cpp</strong> 파일의 메서드 3개 <strong>on_info_updated</strong>, <strong>on_task_reached</strong>, <strong>idle_action</strong>를 완성해야 합니다. <br>
+각 메서드가 해야 할 일은 다음과 같습니다.</p>
+<ul>
+<li>
+<p><strong>on_info_updated</strong><br>
+현재 알려진 정보를 통해 스케쥴링을 진행하고 스케쥴링 결과를 <strong>on_task_reached</strong>와  <strong>idle_action</strong>에서 출력하기 위해 저장해 두어야 합니다. 제공된 파일에는 아무 작업도 하지 않도록 되어있습니다.</p>
+</li>
+<li>
+<p><strong>on_task_reached</strong><br>
+로봇이 작업에 도착했을 때 작업을 시작할지 여부를 <code>bool</code> 타입으로 반환합니다. 제공된 코드에서는 로봇 타입이 드론이 아닐경우 무조건 작업을 실행하게 되어있습니다.</p>
+<ul>
+<li><strong>주의</strong><br>이 메서드가 <code>true</code>를 반환 할 경우 로봇이 작업을 완수할 수 있는지 여부를 확인하지 않고 작업이 시작됩니다. 작업을 완료할 수 없는 로봇이 작업을 시작할경우 로봇이 에너지를 다 쓸 때 까지 다른 로봇이 해당 작업을 시작하지 못하며 진행된 작업 내역은 초기화됩니다.</li>
+</ul>
+</li>
+<li>
+<p><strong>idle_action</strong><br>
+현재 로봇이 이동이나 작업을 진행하고 있지 않을 때 어떠한 행동을 할 지를 <code>ROBOT::TYPE</code> 타입으로 반환하는 메서드 입니다.<br>
+총 5가지 종류의 행동 <code>UP</code>, <code>DOWN</code>, <code>LEFT</code>, <code>RIGHT</code>, <code>HOLD</code> 이 있습니다.<br>
+지도 밖 혹은 벽으로 이동하는 행동을 반환할 경우 메시지와 함께 로봇은 제자리를 유지하게 됩니다.</p>
+</li>
+</ul>
+<br>
+<p><a href="#0-%ED%8C%8C%EC%9D%BC">파일</a>에서 언급했듯이 <code>schedular.h</code>과 <code>schedular.cpp</code> 파일만을 수정하여 스케쥴러를 완성하여 주시기 바랍니다. 추가적으로 필요한 함수나 선언 모두 이 두 파일 내에서 진행해 주시기 바랍니다.<br>
+프로그래밍 단계에서 동작의 확인을 위해 다른 파일들을 수정하시는 것은 상관 없지만 평가시 두개의 스케쥴러 파일과 처음 제공된 나머지 파일을 통해 평가를 진행할 것이기 때문에 <strong>반드시 처음 제공된 파일과 함께 정상 작동하여야 합니다.</strong></p>
+<h1 id="2-주어지는-정보">2. 주어지는 정보</h1>
+<ul>
+<li>
+<p><code>const ROBOT &amp;robot</code> : 로봇 객체의 레퍼런스입니다. 사용 가능한 정보는 다음과 같습니다.</p>
+<pre><code class="language-c++">  robot.id <span class="hljs-comment">// int형인 로봇의 id</span>
+  robot.type <span class="hljs-comment">// ROBOT::TYPE형인 로봇의 타입</span>
+  robot.<span class="hljs-built_in">get_coord</span>() <span class="hljs-comment">// Coord형인 로봇의 현재 위치</span>
+  robot.<span class="hljs-built_in">get_status</span>() <span class="hljs-comment">// ROBOT::STATUS형의 로봇의 현재 상태</span>
+  robot.<span class="hljs-built_in">get_target_coord</span>() <span class="hljs-comment">// 로봇의 상태가 MOVING일 때 목표 좌표</span>
+  robot.<span class="hljs-built_in">get_energy</span>() <span class="hljs-comment">// 현재 남은 로봇의 에너지</span>
+</code></pre>
+</li>
+<li>
+<p><code>const TASK &amp;task</code> : 작업 객체의 레퍼런스입니다. 사용 가능한 정보는 다음과 같습니다.</p>
+<pre><code class="language-c++">    task.id <span class="hljs-comment">// 작업의 id</span>
+    task.coord <span class="hljs-comment">// 작업의 위치</span>
+    task.<span class="hljs-built_in">get_cost</span>(type) <span class="hljs-comment">// type에 해당하는 로봇이 작업을 수행할 때 필요한 에너지</span>
+    task.<span class="hljs-built_in">get_assigned_robot_id</span>() <span class="hljs-comment">// 할당된 로봇의 id를 반환합니다. 할당도니 로봇이 없을경우 -1을 반환합니다.</span>
+    task.<span class="hljs-built_in">is_done</span>() <span class="hljs-comment">// 작업의 완료 여부</span>
+</code></pre>
+</li>
+<li>
+<p><code>const set&lt;Coord&gt; &amp;observed_coords</code> : 에너지가 남아있는 로봇들이 현재 관측하고 있는 영역의 좌표 집합</p>
+<pre><code class="language-c++"><span class="hljs-keyword">for</span>(<span class="hljs-keyword">auto</span> it = observed_coords.<span class="hljs-built_in">begin</span>(); it != observed_coords.<span class="hljs-built_in">end</span>(); ++it)
+{
+    cout &lt;&lt; <span class="hljs-string">&quot;x=&quot;</span> &lt;&lt; it-&gt;x &lt;&lt; <span class="hljs-string">&quot; y=&quot;</span> &lt;&lt; it-&gt;y &lt;&lt; endl;
+}
+</code></pre>
+</li>
+<li>
+<p><code>const set&lt;Coord&gt; &amp;updated_coords</code> : known_object_map 내 정보가 업데이트 된 영역의 좌표 집합. 사용 방법은 <code>observed_coords</code>와 동일합니다.</p>
+</li>
+<li>
+<p><code>const vector&lt;shared_ptr&lt;ROBOT&gt;&gt; &amp;robots</code> : 모든 로봇의 벡터. <code>shared_ptr&lt;ROBOT&gt;</code>는 <code>ROBOT*</code>라고 생각하고 사용하시면 됩니다.</p>
+<pre><code class="language-c++">cout &lt;&lt; robots[<span class="hljs-number">0</span>]-&gt;id &lt;&lt; <span class="hljs-string">&quot; &quot;</span> &lt;&lt; robots[<span class="hljs-number">0</span>]-&gt;<span class="hljs-built_in">get_energy</span>() &lt;&lt; endl;
+<span class="hljs-keyword">for</span>(<span class="hljs-keyword">auto</span> it = robots.<span class="hljs-built_in">begin</span>(); it != robots.<span class="hljs-built_in">end</span>(); ++it)
+{
+  cout &lt;&lt; (*it)-&gt;id &lt;&lt; <span class="hljs-string">&quot; &quot;</span> &lt;&lt; (*it)-&gt;<span class="hljs-built_in">get_energy</span>() &lt;&lt; endl;
+}
+</code></pre>
+</li>
+<li>
+<p><code>const vector&lt;shared_ptr&lt;TASK&gt;&gt; &amp;active_tasks</code> :  로봇에 의해 확인되었고 완료되지 않은 작업의 벡터입니다. 현재 로봇이 작업중인 작업 또한 포함합니다. 사용 방법은 <code>const TASK &amp;task</code>와 <code>const vector&lt;shared_ptr&lt;ROBOT&gt;&gt; &amp;robots</code>를 참고하시기 바랍니다.</p>
+</li>
+<li>
+<p><code>const vector&lt;vector&lt;OBJECT&gt;&gt; &amp;known_object_map</code> : 로봇에 의해 확인된 오브젝트 맵입니다. 로봇이 현재 관측중이지 않은 영역에 작업이 생성될 경우 이 지도에는 반영되지 않습니다.</p>
+<pre><code class="language-c++">cout &lt;&lt; known_object_map[x][y] &lt;&lt; endl;
+</code></pre>
+</li>
+<li>
+<p><code>const vector&lt;vector&lt;vector&lt;int&gt;&gt;&gt; &amp;known_cost_map</code> : 로봇에 의해 확인된 이동 비용 맵입니다. x,y좌표와 type을 통해 이동 비용을 확인할 수 있습니다. 확인 되지 않은 영역의 이동 비용은 -1이고 벽의 이동비용은 int의 최대값입니다.</p>
+<pre><code class="language-c++">cout &lt;&lt; known_cost_map[x][y][type]
+</code></pre>
+<p>모든 정보가 모든 과정에서 필요한 것은 아니지만 편의성을 위해 필요 이상의 정보를 제공하니 적절히 필요한 정보만 사용하시기 바랍니다.</p>
+</li>
+</ul>
+<h1 id="3-타입-설명">3. 타입 설명</h1>
+<ul>
+<li><code>OBJECT</code> : 지도의 특정 좌표에 있는 오브젝트를 나타내는 <code>enum clas</code>로 <code>EMPTY</code>, <code>ROBOT</code>, <code>TASK</code>, <code>ROBOT_AND_TASK</code>, <code>WALL</code>, <code>UNKNOWN</code>가 있고 로봇을 통해 확인되지 않은 영역은 <code>UNKNOWN</code>으로 표시됩니다.</li>
+<li><code>ROBOT::TYPE</code> : 로봇의 종류를 나타내는 <code>enum class</code>로 <code>DRONE</code>, <code>CATERPILLAR</code>, <code>WHEEL</code>가 있습니다.</li>
+<li><code>ROBOT::STATUS</code> : 로봇의 상태를 나타내는 <code>enum class</code>로 <code>IDLE</code>, <code>WORKING</code>, <code>MOVING</code>, <code>EXHAUSTED</code>가 있습니다.</li>
+<li><code>ROBOT::ACTION</code> : 로봇의 행동을 나타내는 <code>enum class</code>로 <code>UP</code>, <code>DOWN</code>, <code>LEFT</code>, <code>RIGHT</code>, <code>HOLD</code>가 있습니다.</li>
+</ul>
+<h1 id="4-정보-프린팅">4. 정보 프린팅</h1>
+<p>다음은 디버깅과 실행 상태 출력 등을 위한 방법입니다.</p>
+<ul>
+<li><code>simulator.h</code> 의 <code>#define VERBOSE</code>의 라인코멘트를 해제하면 로봇의 이동시작/좌표변경/이동 종료/작업시작/작업종료, 작업의 새로운생성/작업발견 그리고 매 시간 현재시간과 전체 오브젝트 맵 등의 정보가 표시됩니다.<br><br></li>
+<li><code>main.cpp</code>의 <code>main</code> 함수 내에 <code>map</code>인스턴스를 통해 다양한 지도정보를 출력 가능합니다.
+<ul>
+<li><code>map.print_cost_map(type)</code> : type에 따른 cost map을 출력합니다.</li>
+<li><code>map.print_object_map()</code> : 전체 object map을 출력합니다.
+<ul>
+<li>벽 : <code>WAL</code></li>
+<li>로봇 한대 : <code>R{type}{id}</code> (예시 id 3인 드론일 경우 <code>RD3</code>)</li>
+<li>로봇 두대 이상 : <code>RS{number of robot}</code> (예시 로봇 3대가 겹쳐있을 경우 <code>RS3</code>)</li>
+<li>작업 : <code>T{task id}</code> (예시 id 3인 작업 <code>T03</code>)</li>
+<li>작업과 로봇 한대 : <code>T{robot type}{robot id}</code> (예시 작업과 id 2의 드론 <code>TD2</code>)</li>
+<li>작업과 두대 이상의 로봇 : <code>TS{number of robot}</code> (예시 작업과 로봇 3대가 겹쳐 있을 경우 <code>TS3</code>)</li>
+<li>빈곳 : 빈칸</li>
+</ul>
+</li>
+<li><code>map.print_known_object_map</code> : 로봇에 의해 발견된 known object map을 출력합니다. 최신 정보가 아닐 수 있습니다. 발견되지 않은 곳은 <code>UNK</code>로 표시됩니다.</li>
+<li><code>map.print_robot_summary()</code> : 전체 로봇들의 id, 위치, 에너지, 상태, 목표 좌표, 할당된 작업 id 등을 출력합니다.</li>
+<li><code>map.print_task_summary()</code> : 최대 생성될 수 있는 작업 수, 현재 생성된 작업수, 발견되고 완료되지 않은 작업 수, 완료된 작업 수 를 출력하고 현재 생성된 작업들에 대해 id, 위치, 할당된 로봇 id, 작업에 필요한 코스트 등을 출력합니다.</li>
+</ul>
+</li>
+</ul>
+<h1 id="4-알아둘점">4. 알아둘점</h1>
+<h2 id="41-로봇">4.1. 로봇</h2>
+<h3 id="시야범위">시야범위</h3>
+<ul>
+<li>드론 : 자신을 기준으로 위,아래,좌,우로 거리 2까지 직사각형 영역을 확인하여 총 25칸을 확인 합니다.</li>
+<li>캐터필러 : 자신을 기준으로 위,아래,좌,우로 거리 1까지 직사각형 영역을 확인하여 총 9칸을 확인 합니다.</li>
+<li>휠 : 자신을 기준으로 위,아래,좌,우로 거리 1까지 십자가 영역을 확인하여 총 5칸을 확인 합니다.</li>
+<li>에너지를 다 소모한 로봇은 관측도 불가능해 집니다.</li>
+</ul>
+<h3 id="이동">이동</h3>
+<ul>
+<li>드론의 이동비용은 시드에 따라 달라지며 맵 전체가 동일합니다.</li>
+<li>캐터필러는 최소 이동비용은 크지만 최대 이동 비용이 작습니다.</li>
+<li>휠은 최소 이동비용은 작지만 최대 이동비용이 큽니다.</li>
+<li>이동에 필요한 시간은 총 이동 비용을 10으로 나눈 값을 올림한 것과 같습니다. 총 이동비용은 (현재위치 코스트 + 목표 위치 코스트) / 2</li>
+<li>로봇이 이동 시 현재 위치를 벗어나는데 현재 위치 코스트의 절반의 에너지를 사용하고 목표위치의 중앙에 도착하는데 목표위치 코스트의 절반을 사용하며 목표 위치 중앙에 도착하면 이동이 종료됩니다.</li>
+<li>이동중에도 관측이 가능합니다.</li>
+<li>로봇은 겹쳐질 수 있습니다.</li>
+<li>이동중 혹은 작업중에 에너지를 모두 소모하면 그 자리에서 정지합니다.</li>
+<li>이동중 혹은 작업중에는 조작이 불가능 합니다.</li>
+</ul>
+<h3 id="기타">기타</h3>
+<ul>
+<li>드론으로 작업을 시작하면 드론은 에너지가 모두 사용될 때 까지 작업을 진행하게 되므로 주의하시기 바랍니다.</li>
+</ul>
+<h2 id="42-작업">4.2 작업</h2>
+<ul>
+<li>완성되지 않은 작업, 로봇, 벽이 있는 곳에는 새로운 작업이 생성되지 않습니다.</li>
+<li>작업이 완료된 장소에는 작업이 다시 생성될 수 있습니다.</li>
+<li>작업을 완료하기 위해 필요한 에너지는 로봇의 종류에 따라 다릅니다.</li>
+</ul>
+<h2 id="43-기타">4.3 기타</h2>
+<ul>
+<li>완성해야 하는 세 메서드의 인수로 주어진 정보 외의 정보는 모르는 것으로 간주해야 합니다. ( 전체 시간, 최대 작업수 등 모르는 것으로 간주)</li>
+<li>맵 크기 작게해서 먼저 알고리즘을 개발하고 추후 맵 크기를 키워 시도해 보시는걸 추천드립니다.</li>
+<li>코드는 윈도우의 cl컴파일러를 통해 C++14 버전에서 작성 및 테스트 되었습니다. 다른 환경에서 문제가 발생할 경우 제보해 주시기 바랍니다.</li>
+</ul>
+
+        
+        
+    </body>
+    </html>
