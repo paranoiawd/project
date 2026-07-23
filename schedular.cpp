@@ -1,6 +1,7 @@
 #include "schedular.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <map>
 #include <queue>
 #include <utility>
@@ -387,8 +388,18 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     // misclassify the sparse config.  A dense map that happens to reveal
     // slowly may still be upgraded (sparse -> dense is the safe direction)
     // while its count crosses 12 early on.
+    {
+        static int force = -1;
+        if (force == -1)
+        {
+            const char *f = getenv("SCHED_FORCE_REGIME");
+            force = f ? atoi(f) : 0;
+        }
+        if (force > 0)
+            st.regime = force;
+    }
     if (st.regime == 0 && st.now >= 130)
-        st.regime = (static_cast<int>(st.first_seen.size()) >= 6) ? 1 : 2;
+        st.regime = (static_cast<int>(st.first_seen.size()) >= 7) ? 1 : 2;
     // corrections, both structurally safe for the sparse original config whose
     // discovered count cannot exceed 8 before the first spawn (~t=500):
     if (st.regime == 2 && st.now < 700 && static_cast<int>(st.first_seen.size()) >= 12)
@@ -845,6 +856,27 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                 vector<Coord> rev(route.rbegin(), route.rend());
                 route.swap(rev);
             }
+            // triage: trim the tail beyond what this drone can actually pay
+            // for (walk cost estimated waypoint-to-waypoint), so the covered
+            // arc is contiguous and the sacrificed stretch is a known, single
+            // segment that worker debt patrols will inherit
+            {
+                int sc = (st.drone_cost > 0) ? (ceil10(st.drone_cost / 2 + st.drone_cost) * 10 + 10) : 310;
+                int budget = r.get_energy() - 300;
+                Coord prev = pos;
+                size_t keep = 0;
+                for (size_t w = 0; w < route.size(); ++w)
+                {
+                    int hop = (abs(route[w].x - prev.x) + abs(route[w].y - prev.y));
+                    budget -= static_cast<int>(hop * sc * 1.15);
+                    if (budget < 0)
+                        break;
+                    keep = w + 1;
+                    prev = route[w];
+                }
+                if (keep < route.size())
+                    route.resize(max<size_t>(keep, 1));
+            }
             st.serp_route[r.id] = route;
         }
 
@@ -968,7 +1000,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
             else
             {
                 // undecided: flat cap so a sparse map keeps its ring fuel
-                floor_energy = max(DRONE_CAMERA_FLOOR, e0 - 1500);
+                floor_energy = max(DRONE_CAMERA_FLOOR, e0 - 800);
             }
         }
         else
