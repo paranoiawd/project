@@ -86,6 +86,7 @@ int main(int argc, char **argv)
 
     // instrumentation: per-task spawn/discovery times + affordability windows
     vector<int> spawn_time, disc_time, first_affordable, last_affordable, affordable_ticks;
+    vector<vector<int>> cell_last_seen(MAP_SIZE, vector<int>(MAP_SIZE, -1));
     auto track = [&](int t) {
         auto &tasks = map.get_tasks();
         while (spawn_time.size() < tasks.size())
@@ -152,6 +153,8 @@ int main(int argc, char **argv)
             }
         }
         observed_coords = map.observed_coord_by_robot();
+        for (auto &c : observed_coords)
+            cell_last_seen[c.x][c.y] = time;
         updated_coords = map.update_coords(observed_coords);
 
         timer.start();
@@ -226,9 +229,20 @@ int main(int argc, char **argv)
         else
             worker_energy += r->get_energy();
     }
+    int drone_cell_cost = -1;
+    for (int x = 0; x < MAP_SIZE && drone_cell_cost < 0; ++x)
+        for (int y = 0; y < MAP_SIZE; ++y)
+        {
+            int c = map.get_cost({x, y}, ROBOT::TYPE::DRONE);
+            if (c >= 0 && c != INFINITE)
+            {
+                drone_cell_cost = c;
+                break;
+            }
+        }
     cout << seed << "," << NUM_MAX_TASKS << "," << created << "," << discovered
          << "," << completed << "," << map.get_exhausted_robot_num() << "," << time
-         << "," << worker_energy << "," << drone_energy << endl;
+         << "," << worker_energy << "," << drone_energy << "," << drone_cell_cost << endl;
 
     if (argc > 3) // verbose dump for failure analysis
     {
@@ -256,6 +270,20 @@ int main(int argc, char **argv)
                     ++unknown_cells;
         cout << "unknown cells at end: " << unknown_cells << "/" << MAP_SIZE * MAP_SIZE << endl;
         {
+            int hole = 0, timing = 0;
+            for (auto &tp : map.get_tasks())
+            {
+                if (disc_time[tp->id] >= 0)
+                    continue;
+                int ls = cell_last_seen[tp->coord.x][tp->coord.y];
+                if (ls < 0)
+                    ++hole;
+                else if (ls < spawn_time[tp->id])
+                    ++timing;
+                cout << "  MISS T" << tp->id << " spawn=" << spawn_time[tp->id]
+                     << " cell_last_seen=" << ls << " " << tp->coord << endl;
+            }
+            cout << "undiscovered: coverage_hole=" << hole << " timing_miss=" << timing << endl;
             int A = 0, B = 0, C = 0;
             for (auto &tp : map.get_tasks())
             {

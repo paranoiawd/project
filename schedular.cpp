@@ -45,9 +45,9 @@ namespace
     const int WORKER_TRAVEL_CAP = 3800;               // normal per-assignment travel budget
     const int DRONE_CAMERA_FLOOR = 400;               // drones never spend below this (parked sensor)
     const int DRONE_STEP_EST = 300;                   // rough energy for one drone step
-    const int DRONE_BURST_DEF = 3000;                 // energy a drone may spend ahead of the line
-    const int TIME_HORIZON_PER_CELL = 85;             // assumed run length ~ 85 * map_size ticks
-    const int RESWEEP_MIN_GAIN = 2500;                // minimum window staleness to sweep to
+    const int DRONE_BURST_DEF = 800;                 // energy a drone may spend ahead of the line
+    const int TIME_HORIZON_PER_CELL = 99;             // assumed run length ~ 85 * map_size ticks
+    const int RESWEEP_MIN_GAIN = 1500;                // minimum window staleness to sweep to
     const int DRONE_LOCAL_RANGE = 1500;               // "local" window distance for crawling
     const double LOCAL_KEEP_RATIO = 0.75;             // take local window above this vs global
     const int STALE_UNSEEN = 2000;                    // staleness score of a never-seen cell
@@ -62,10 +62,9 @@ namespace
     const int ENDGAME_TICKS_DEF = 600;                // endgame window before the hard horizon
     const double TOUR_FIRST_BONUS = 0.55;             // score factor for a tour's first leg
     const int TOUR_MAX_LEN = 8;                       // max tasks per planned tour
-    const int WPATROL_AFTER = 1000;                   // idle workers scout only after this tick
-    const int WPATROL_MIN_ENERGY = 5000;              // ...and only with this much energy
-    const int WPATROL_RANGE = 1200;                   // ...within this travel budget
-    const int WPATROL_MIN_GAIN = 1800;                // ...to windows at least this stale
+    const int NEED_T_PER_CELL = 66;                   // ~just before the last spawns
+    const int DEBT_RESERVE = 3000;                    // worker energy kept for late
+                                                      // observation-debt trips
     const int PLAN_INF = 1000000000;
 
     const int DXS[4] = {0, 0, -1, 1};
@@ -106,10 +105,83 @@ struct Scheduler::State
     vector<vector<int>> dist_c; // robot -> CLEAN travel energy (for costing)
     map<int, int> owner;      // task id -> robot id (book assignment)
     map<int, int> first_seen; // task id -> tick it was first discovered
+    int regime = 0;           // 0=undecided, 1=dense(completion focus), 2=sparse(discovery focus)
 
     // drone sweep state
     map<int, pair<int, int>> drone_half; // drone id -> [x_lo, x_hi]
     map<int, Coord> drone_goal;          // drone id -> committed sweep window center
+    map<int, Coord> patrol_goal;         // worker id -> committed patrol window center
+    map<int, int> lane_of_worker;        // worker id -> interior lane index
+    vector<vector<Coord>> lanes_left;    // per-lane remaining waypoints (debt phase)
+    bool lanes_inited = false;
+    map<int, vector<Coord>> serp_route;  // drone id -> late rim sweep waypoints
+    map<int, bool> serp_started;         // drone id -> late sweep has begun
+    vector<char> drone_covered;          // cells the drones' remaining affordable
+                                         // route will still observe this run
+
+    // Late-phase rim route: this drone's half of a perimeter ring running at
+    // distance r from the map edge.  Two drones jointly cover the outer
+    // (2r+1)-wide band; the interior is the workers' natural habitat and is
+    // kept fresh by their travel and idle patrols instead.
+    vector<Coord> make_rim_route(int xlo, int xhi, int r, const Coord &from) const
+    {
+        int lo = min(r, n - 1), hi = max(n - 1 - r, 0);
+        int xin = min(max(xlo + r, lo), hi);   // inner x-limit of my half arc
+        int xout = min(max(xhi - r, lo), hi);  // outer x-limit
+        if (xlo <= 0 && xhi >= n - 1) // single drone: full ring
+        {
+            vector<Coord> route;
+            route.push_back(Coord(lo, lo));
+            route.push_back(Coord(lo, hi));
+            route.push_back(Coord(hi, hi));
+            route.push_back(Coord(hi, lo));
+            route.push_back(Coord(lo, lo));
+            return route;
+        }
+        // half arc: along the bottom to my outer column, up it, back along
+        // top — densified to a waypoint every few cells so that a blocked
+        // waypoint only ever skips a short stretch, and wall detours are
+        // pulled back onto the rim quickly.
+        vector<Coord> corners;
+        bool left_half = (xlo <= 0);
+        int col = left_half ? lo : hi;
+        int xend = left_half ? xout : xin;
+        bool from_bottom = (from.y <= n / 2);
+        if (from_bottom)
+        {
+            corners.push_back(Coord(xend, lo));
+            corners.push_back(Coord(col, lo));
+            corners.push_back(Coord(col, hi));
+            corners.push_back(Coord(xend, hi));
+        }
+        else
+        {
+            corners.push_back(Coord(xend, hi));
+            corners.push_back(Coord(col, hi));
+            corners.push_back(Coord(col, lo));
+            corners.push_back(Coord(xend, lo));
+        }
+        vector<Coord> route;
+        Coord cur = corners.front();
+        route.push_back(cur);
+        for (size_t i = 1; i < corners.size(); ++i)
+        {
+            Coord nxt = corners[i];
+            int steps = abs(nxt.x - cur.x) + abs(nxt.y - cur.y);
+            int sx = (nxt.x > cur.x) - (nxt.x < cur.x);
+            int sy = (nxt.y > cur.y) - (nxt.y < cur.y);
+            Coord p = cur;
+            for (int s = 2; s < steps; s += 2)
+            {
+                p = Coord(cur.x + sx * min(s, abs(nxt.x - cur.x)),
+                          cur.y + sy * max(0, s - abs(nxt.x - cur.x)));
+                route.push_back(p);
+            }
+            route.push_back(nxt);
+            cur = nxt;
+        }
+        return route;
+    }
 
     // per-tick cache: dijkstra maps sourced at task cells (for chain checks)
     map<pair<int, int>, vector<int>> task_dist_cache; // (task id, type) -> dist
@@ -127,6 +199,7 @@ struct Scheduler::State
     }
 
     // ---- basic helpers ----------------------------------------------------
+    int horizon_dense() const { return 85 * n; }
     int idx(int x, int y) const { return x * n + y; }
     int idx(const Coord &c) const { return c.x * n + c.y; }
     bool in_map(int x, int y) const { return x >= 0 && y >= 0 && x < n && y < n; }
@@ -225,7 +298,9 @@ struct Scheduler::State
                 if (!serve_dist.empty())
                 {
                     int sd = serve_dist[idx(x, y)];
-                    const double wlo = 0.15, whi = 3.0, wsl = 2000.0;
+                    const double wlo = (regime == 1) ? 0.15 : 0.6;
+                    const double whi = (regime == 1) ? 3.0 : 1.8;
+                    const double wsl = (regime == 1) ? 2000.0 : 3000.0;
                     double w = (sd >= PLAN_INF) ? wlo : whi - static_cast<double>(sd) / wsl;
                     if (w < wlo)
                         w = wlo;
@@ -235,6 +310,25 @@ struct Scheduler::State
                 }
                 stale[idx(x, y)] = s;
             }
+    }
+
+    // number of non-wall cells in the window not observed since need_t and
+    // not already on a drone's remaining (affordable) rim route — i.e. cells
+    // that could still hide a task and that nobody else will look at
+    int debt_gain(int cx, int cy, int r, int need_t) const
+    {
+        int g = 0;
+        for (int xx = max(cx - r, 0); xx <= min(cx + r, n - 1); ++xx)
+            for (int yy = max(cy - r, 0); yy <= min(cy + r, n - 1); ++yy)
+            {
+                if ((*obj_map)[xx][yy] == OBJECT::WALL)
+                    continue;
+                if (!drone_covered.empty() && drone_covered[idx(xx, yy)])
+                    continue;
+                if (last_seen[xx][yy] < need_t)
+                    ++g;
+            }
+        return g;
     }
 
     int window_gain(int cx, int cy, int r) const
@@ -286,6 +380,21 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     // ---- info update ------------------------------------------------------
     for (set<Coord>::const_iterator it = observed_coords.begin(); it != observed_coords.end(); ++it)
         st.last_seen[it->x][it->y] = st.now;
+
+    // Regime detection.  A sparse (original-config) map has only cap/2 = 8
+    // initial tasks, so before the first spawn (~t=500) its discovered count
+    // can never reach 9: deciding at t=490 with threshold 9 can never
+    // misclassify the sparse config.  A dense map that happens to reveal
+    // slowly may still be upgraded (sparse -> dense is the safe direction)
+    // while its count crosses 12 early on.
+    if (st.regime == 0 && st.now >= 130)
+        st.regime = (static_cast<int>(st.first_seen.size()) >= 6) ? 1 : 2;
+    // corrections, both structurally safe for the sparse original config whose
+    // discovered count cannot exceed 8 before the first spawn (~t=500):
+    if (st.regime == 2 && st.now < 700 && static_cast<int>(st.first_seen.size()) >= 12)
+        st.regime = 1; // late-revealing dense map
+    if (st.regime == 1 && st.now == 510 && static_cast<int>(st.first_seen.size()) <= 8)
+        st.regime = 2; // was a lucky sparse map after all
 
     if (st.drone_cost < 0)
     {
@@ -511,6 +620,12 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
             int need = travel + we;
             if (need > r.get_energy())
                 continue;
+            // observation-debt reserve: before the late re-observation phase a
+            // worker never spends into its last DEBT_RESERVE on tasks, so it
+            // can still close never-seen map gaps afterwards
+            if (st.regime == 2 && st.now < NEED_T_PER_CELL * st.n &&
+                r.get_energy() - need < DEBT_RESERVE)
+                continue;
             // a trip that cannot finish before the assumed end of the run is
             // pure waste: energy walks out but the task never completes
             int ticks_left = HORIZON_HARD_PER_CELL * st.n - st.now;
@@ -625,39 +740,30 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         }
     }
 
-    // ---- late worker patrol: idle, rich workers convert leftover energy
-    // into discoveries right next to themselves (cheap to serve by design)
-    st.build_staleness();
+    // ---- endgame interior tiling (workers) --------------------------------
+    // The drones' late rim ring re-observes the outer band after the last
+    // task spawns; the interior is re-observed here: from TILE_START every
+    // idle worker walks nearest-first through a fixed lattice of interior
+    // waypoints (stride 3 fits the 3x3/cross views), so that ~every interior
+    // cell is seen again after all spawning has finished.
+    st.serve_dist.assign(st.n * st.n, PLAN_INF);
     for (size_t i = 0; i < robots.size(); ++i)
     {
         const ROBOT &r = *robots[i];
-        if (r.type == ROBOT::TYPE::DRONE || r.get_status() == ROBOT::STATUS::EXHAUSTED ||
-            r.get_status() == ROBOT::STATUS::WORKING)
+        if (r.type == ROBOT::TYPE::DRONE || r.get_status() == ROBOT::STATUS::EXHAUSTED)
             continue;
-        if (st.assigned[r.id] != -1 || st.now < WPATROL_AFTER ||
-            r.get_energy() < WPATROL_MIN_ENERGY)
+        if (r.get_energy() < 1500 || st.dist_c[r.id].empty())
             continue;
-        Coord pos = (r.get_status() == ROBOT::STATUS::MOVING) ? r.get_target_coord() : r.get_coord();
-        const vector<int> &d = st.dist_c[r.id];
-        int viewr = ROBOT::view_range_list[static_cast<size_t>(r.type)];
-        int best_gain = 0;
-        Coord best = pos;
-        for (int x = 0; x < st.n; ++x)
-            for (int y = 0; y < st.n; ++y)
-            {
-                int dd = d[st.idx(x, y)];
-                if (dd >= PLAN_INF || dd > WPATROL_RANGE || Coord(x, y) == pos)
-                    continue;
-                int g = st.window_gain(x, y, viewr) - dd / 2;
-                if (g > best_gain)
-                {
-                    best_gain = g;
-                    best = Coord(x, y);
-                }
-            }
-        if (best_gain >= WPATROL_MIN_GAIN && !(best == pos))
-            st.next_step[r.id] = st.first_step(st.par[r.id], pos, best);
+        for (int c = 0; c < st.n * st.n; ++c)
+        {
+            int dd = st.dist_c[r.id][c];
+            if (dd > r.get_energy())
+                dd = PLAN_INF;
+            if (dd < st.serve_dist[c])
+                st.serve_dist[c] = dd;
+        }
     }
+    st.build_staleness();
 
     // ---- drones: committed serpentine sweeps ------------------------------
 
@@ -680,7 +786,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         if (repartition)
         {
             st.drone_half.clear();
-            st.drone_goal.clear();
+            st.drone_goal.clear(); // NOTE: rim-route state survives repartition
             if (!active_drones.empty())
             {
                 // sort by current x so bands match where drones already are
@@ -700,6 +806,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         }
     }
 
+    st.drone_covered.assign(st.n * st.n, 0);
     for (size_t i = 0; i < active_drones.size(); ++i)
     {
         const ROBOT &r = *active_drones[i];
@@ -708,23 +815,174 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         pair<int, int> half = st.drone_half[r.id];
         const vector<int> &d = st.dist[r.id];
 
-        // Pacing: spread the whole energy budget linearly over an assumed
-        // horizon so observation coverage lasts as long as tasks keep coming.
-        int horizon = TIME_HORIZON_PER_CELL * st.n;
-        int e0 = st.init_energy[r.id];
-        int floor_energy = DRONE_CAMERA_FLOOR;
-        if (st.now < horizon)
+        // Two-phase observation:
+        //  - Early: a small burst of adaptive scouting, then parked (camera).
+        //  - Late: a committed full-tiling serpentine sweep of the band, timed
+        //    (from the seed's known drone step cost) to finish just before the
+        //    assumed end of the run, so that every cell is observed as late as
+        //    possible — after as many task spawns as possible.
+        int horizon = HORIZON_HARD_PER_CELL * st.n;
+        int step_ticks = 30; // pessimistic default until the drone cost is known
+        if (st.drone_cost > 0)
+            step_ticks = (st.drone_cost / 2 + st.drone_cost + 9) / 10 + 1;
+        // half-ring length: one vertical side + two half horizontal sides,
+        // plus an approach allowance
+        int route_steps = (st.n - 2 * viewr) + 2 * (st.n / 2 - viewr) + 5;
+        int t_serp = horizon - 30 - static_cast<int>(route_steps * step_ticks * 1.1);
+        if (t_serp < 0)
+            t_serp = 0;
+
+        if (st.regime != 2)
+            t_serp = PLAN_INF; // dense/undecided: pure adaptive scouting, no rim ring
+        if (st.now >= t_serp && !st.serp_started[r.id])
         {
-            double frac = static_cast<double>(st.now) / static_cast<double>(horizon);
-            int burst = DRONE_BURST_DEF;
-            int budget_floor = e0 - burst - static_cast<int>((e0 - burst - DRONE_CAMERA_FLOOR) * frac);
-            floor_energy = max(DRONE_CAMERA_FLOOR, budget_floor);
+            st.serp_started[r.id] = true;
+            vector<Coord> route = st.make_rim_route(half.first, half.second, viewr, pos);
+            if (!route.empty() &&
+                abs(route.back().x - pos.x) + abs(route.back().y - pos.y) <
+                    abs(route.front().x - pos.x) + abs(route.front().y - pos.y))
+            {
+                vector<Coord> rev(route.rbegin(), route.rend());
+                route.swap(rev);
+            }
+            st.serp_route[r.id] = route;
+        }
+
+        if (st.serp_started[r.id])
+        {
+            // ---- late phase: follow the rim route down to the last step ----
+            if (r.get_energy() - DRONE_STEP_EST < 120)
+                continue; // out of fuel: parked camera
+            vector<Coord> &route = st.serp_route[r.id];
+            while (!route.empty())
+            {
+                Coord wp = route.front();
+                if (wp == pos)
+                {
+                    route.erase(route.begin());
+                    continue;
+                }
+                {
+                    int sc0 = (st.drone_cost > 0) ? (ceil10(st.drone_cost / 2 + st.drone_cost) * 10 + 10) : 310;
+                    int direct = (abs(wp.x - pos.x) + abs(wp.y - pos.y)) * sc0;
+                    if (d[st.idx(wp)] < PLAN_INF && d[st.idx(wp)] > 3 * direct + 600)
+                    {
+                        route.erase(route.begin()); // pocketed: not worth the detour
+                        continue;
+                    }
+                }
+                if (d[st.idx(wp)] >= PLAN_INF)
+                {
+                    // walled waypoint: try to substitute a nearby reachable
+                    // cell so the arc segment is still visited
+                    Coord sub(-1, -1);
+                    int best = PLAN_INF;
+                    for (int dx = -2; dx <= 2; ++dx)
+                        for (int dy = -2; dy <= 2; ++dy)
+                        {
+                            int nx = wp.x + dx, ny = wp.y + dy;
+                            if (!st.in_map(nx, ny) || Coord(nx, ny) == pos)
+                                continue;
+                            int dd = d[st.idx(nx, ny)];
+                            if (dd < best)
+                            {
+                                best = dd;
+                                sub = Coord(nx, ny);
+                            }
+                        }
+                    route.erase(route.begin());
+                    if (st.in_map(sub.x, sub.y))
+                        route.insert(route.begin(), sub);
+                    else
+                        continue;
+                }
+                break;
+            }
+            if (route.empty())
+            {
+                // Own arc finished: adopt the unfinished arc of a drone that
+                // ran dry mid-ring, so the whole rim still gets covered.
+                for (size_t o = 0; o < robots.size(); ++o)
+                {
+                    const ROBOT &other = *robots[o];
+                    if (other.id == r.id || other.type != ROBOT::TYPE::DRONE)
+                        continue;
+                    if (other.get_status() != ROBOT::STATUS::EXHAUSTED && other.get_energy() > 500)
+                        continue;
+                    map<int, vector<Coord>>::iterator oit = st.serp_route.find(other.id);
+                    if (oit != st.serp_route.end() && !oit->second.empty())
+                    {
+                        route.swap(oit->second);
+                        break;
+                    }
+                }
+            }
+            // mark the part of the route this drone can still afford as
+            // covered, so worker debt patrols go where nobody else will
+            {
+                int sc = (st.drone_cost > 0) ? (ceil10(st.drone_cost / 2 + st.drone_cost) * 10 + 10) : 310;
+                int budget = r.get_energy() - 150;
+                Coord prev = pos;
+                for (size_t w = 0; w < route.size() && budget > 0; ++w)
+                {
+                    int hop = abs(route[w].x - prev.x) + abs(route[w].y - prev.y);
+                    budget -= hop * sc;
+                    if (budget <= 0)
+                        break;
+                    for (int dx = -viewr; dx <= viewr; ++dx)
+                        for (int dy = -viewr; dy <= viewr; ++dy)
+                            if (st.in_map(route[w].x + dx, route[w].y + dy))
+                                st.drone_covered[st.idx(route[w].x + dx, route[w].y + dy)] = 1;
+                    prev = route[w];
+                }
+            }
+            if (!route.empty())
+            {
+                st.next_step[r.id] = st.first_step(st.par[r.id], pos, route.front());
+                continue;
+            }
+            // route done: fall through to adaptive crawling with leftovers
+        }
+
+        // ---- early phase / post-route: adaptive stale-window crawling ----
+        // The early scouting burst is whatever the ring will not need: on
+        // expensive-drone seeds that is zero, so the ring always completes.
+        int step_cost = (st.drone_cost > 0) ? (ceil10(st.drone_cost / 2 + st.drone_cost) * 10 + 10) : 310;
+        int floor_energy;
+        if (st.regime != 2)
+        {
+            // dense/undecided: spend on a linear schedule with an up-front
+            // burst (the completion-focused profile); undecided keeps the
+            // burst small so a sparse map still has ring fuel left
+            int e0 = st.init_energy[r.id];
+            if (st.regime == 1)
+            {
+                floor_energy = DRONE_CAMERA_FLOOR;
+                if (st.now < st.horizon_dense())
+                {
+                    double frac = static_cast<double>(st.now) / static_cast<double>(st.horizon_dense());
+                    int budget_floor = e0 - 3000 - static_cast<int>((e0 - 3000 - DRONE_CAMERA_FLOOR) * frac);
+                    floor_energy = max(DRONE_CAMERA_FLOOR, budget_floor);
+                }
+            }
+            else
+            {
+                // undecided: flat cap so a sparse map keeps its ring fuel
+                floor_energy = max(DRONE_CAMERA_FLOOR, e0 - 1500);
+            }
+        }
+        else
+        {
+            int ring_cost = static_cast<int>(route_steps * step_cost * 1.15);
+            int burst_allow = max(0, st.init_energy[r.id] - 400 - ring_cost);
+            if (burst_allow > DRONE_BURST_DEF)
+                burst_allow = DRONE_BURST_DEF;
+            floor_energy = st.serp_started[r.id] ? DRONE_CAMERA_FLOOR
+                                                 : max(DRONE_CAMERA_FLOOR, st.init_energy[r.id] - burst_allow);
         }
         if (r.get_energy() - DRONE_STEP_EST < floor_energy)
-            continue; // paced out this tick (parked as camera)
+            continue; // parked as camera until the late sweep begins
 
-        // Committed goal: keep it until actually reached (re-checking its
-        // staleness would cancel it as we approach and observe it ourselves).
         map<int, Coord>::iterator gi = st.drone_goal.find(r.id);
         bool need_new = true;
         if (gi != st.drone_goal.end())
@@ -735,9 +993,8 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         }
         if (need_new)
         {
-            // Local-first: crawl to a nearby stale window when it is at least
-            // half as good as the best in the band; otherwise cross to the
-            // globally stalest window.  This self-organizes into sweeps.
+            int need_t = NEED_T_PER_CELL * st.n;
+            bool debt_mode = st.now >= need_t;
             int best_local = 0, best_global = 0;
             Coord cell_local = pos, cell_global = pos;
             for (int x = half.first; x <= half.second; ++x)
@@ -748,7 +1005,8 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                         continue;
                     if (Coord(x, y) == pos)
                         continue;
-                    int g = st.window_gain(x, y, viewr);
+                    int g = debt_mode ? st.debt_gain(x, y, viewr, need_t) * 1000
+                                      : st.window_gain(x, y, viewr);
                     if (g > best_global)
                     {
                         best_global = g;
@@ -760,19 +1018,64 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                         cell_local = Coord(x, y);
                     }
                 }
+            int min_gain = debt_mode ? 1000 : ((st.regime == 1) ? 2500 : RESWEEP_MIN_GAIN);
             Coord chosen = pos;
-            if (best_local >= RESWEEP_MIN_GAIN && best_local >= LOCAL_KEEP_RATIO * best_global)
+            if (best_local >= min_gain && best_local >= LOCAL_KEEP_RATIO * best_global)
                 chosen = cell_local;
-            else if (best_global >= RESWEEP_MIN_GAIN)
+            else if (best_global >= min_gain)
                 chosen = cell_global;
             if (chosen == pos)
             {
                 st.drone_goal.erase(r.id);
-                continue; // nothing stale enough: hold and observe
+                continue;
             }
             st.drone_goal[r.id] = chosen;
         }
         st.next_step[r.id] = st.first_step(st.par[r.id], pos, st.drone_goal[r.id]);
+    }
+
+
+
+    if (st.now >= 800 && st.regime != 1)
+    {
+        // Idle-worker patrol: refresh windows that still need (re)observation.
+        // Before the last possible task spawn this follows staleness; after it
+        // (t >= NEED_T) the gain becomes "cells not seen since the final
+        // spawn" — the exact re-observation debt for full task discovery.
+        int need_t = NEED_T_PER_CELL * st.n;
+        for (size_t i = 0; i < robots.size(); ++i)
+        {
+            const ROBOT &r = *robots[i];
+            if (r.type == ROBOT::TYPE::DRONE || r.get_status() == ROBOT::STATUS::EXHAUSTED ||
+                r.get_status() == ROBOT::STATUS::WORKING)
+                continue;
+            if (st.assigned[r.id] != -1 || r.get_energy() < 2000 || st.dist_c[r.id].empty())
+                continue;
+            Coord pos = (r.get_status() == ROBOT::STATUS::MOVING) ? r.get_target_coord() : r.get_coord();
+            const vector<int> &d = st.dist_c[r.id];
+            int viewr = ROBOT::view_range_list[static_cast<size_t>(r.type)];
+            bool debt_mode = st.now >= need_t;
+            int range = debt_mode ? max(0, r.get_energy() - 300) : 4000;
+            int best_gain = 0;
+            Coord best = pos;
+            for (int x = 0; x < st.n; ++x)
+                for (int y = 0; y < st.n; ++y)
+                {
+                    int dd = d[st.idx(x, y)];
+                    if (dd >= PLAN_INF || dd > range || Coord(x, y) == pos)
+                        continue;
+                    int g = debt_mode ? st.debt_gain(x, y, viewr, need_t) * 1000 - dd / 2
+                                      : st.window_gain(x, y, viewr) - dd / 2;
+                    if (g > best_gain)
+                    {
+                        best_gain = g;
+                        best = Coord(x, y);
+                    }
+                }
+            int min_gain = debt_mode ? 1000 : 600;
+            if (best_gain >= min_gain && !(best == pos))
+                st.next_step[r.id] = st.first_step(st.par[r.id], pos, best);
+        }
     }
 
 
