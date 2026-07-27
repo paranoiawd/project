@@ -90,7 +90,7 @@ namespace
                                 // documented dead end.  x1000 weight on where a route LEAVES a worker,
                                 // valued by how cheaply it could reach the next
                                 // task to spawn (uniform over the map)
-    int EXACT_MAX = 0;          // solve the fleet plan exactly when at most this many
+    int EXACT_MAX = 16;         // solve the fleet plan exactly when at most this many
                                 // free tasks are known (0 = always use local search)
     int PATROL_LATE_T = 1200;   // after this tick there is nothing left to save for
     int PATROL_LATE_ENERGY = 400;// so the patrol floor drops to here
