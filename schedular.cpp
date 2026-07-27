@@ -78,7 +78,7 @@ namespace
     int SCOUT_K = 500;          // energy offset in the value/cost ratio (~one step)
     int SCOUT_MIN_RATIO = 900;  // minimum value per unit cost for a drone to move
     int PATROL_MIN_ENERGY = 1400;// a worker below this keeps its energy for tasks
-    int PATROL_MIN_RATIO = 900; // workers see fewer cells per step than drones
+    int PATROL_MIN_RATIO = 300; // workers see fewer cells per step than drones
     int PATROL_DISPERSE = 1200; // x1000 weight pushing patrols away from other workers
     int PLAN_SLACK = 0;   // ticks of margin a route must finish inside
     int PLAN_ITERS = 12;        // local-search rounds per tick
@@ -96,7 +96,9 @@ namespace
     int PATROL_LATE_ENERGY = 50; // so the patrol floor drops to here
     int DRONE_PACE_T = 1700;    // ticks over which a drone's fuel is spread (0 = no pacing)
     int DRONE_BURST = 3000;     // fuel a drone may spend ahead of that line
-    double SERVE_W_DEAD = 0.25; // residual weight once nothing found here could
+    int DRONE_PHASE1 = 0;       // x1000 of the drone's fuel to be spent by the moment
+                                // the workers commit (0 = single linear line)
+    double SERVE_W_DEAD = 1.0;  // residual weight once nothing found here could
                                 // still be served: raw discovery is still worth
                                 // something to a robot whose fuel is otherwise lost
 
@@ -157,6 +159,7 @@ namespace
         TASK_MAGNET = envi("SCHED_T_MAGNET", TASK_MAGNET);
         DRONE_PACE_T = envi("SCHED_T_DPACE", DRONE_PACE_T);
         DRONE_BURST = envi("SCHED_T_DBURST", DRONE_BURST);
+        DRONE_PHASE1 = envi("SCHED_T_DP1", DRONE_PHASE1);
         SERVE_W_DEAD = envd("SCHED_T_SWDEAD", SERVE_W_DEAD);
         TOUR_FIRST_BONUS = envd("SCHED_T_TFB", TOUR_FIRST_BONUS);
         ASSIGN_STICKY = envd("SCHED_T_STICKY", ASSIGN_STICKY);
@@ -1141,13 +1144,33 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         // seeds, moving the line to 1200 buys +0.13 completed for -0.57
         // discovered and 2000 buys the reverse, so 1700 is the joint optimum.
         // A drone below the line parks and keeps observing as a fixed camera.
+        // Two-phase pacing.  The workers do not act until their energy stops
+        // fitting in the time left (about t=800), so *within* that window it
+        // makes no difference when a cell is first seen -- but everything seen
+        // after it is a task the fleet may not reach.  So the first pass is
+        // compressed into the window before the workers commit, and the rest of
+        // the fuel is spread over the re-sweep that catches the late spawns.
         int floor_energy = DRONE_CAMERA_FLOOR;
         if (DRONE_PACE_T > 0 && st.now < DRONE_PACE_T)
         {
             int e0 = st.init_energy[r.id];
-            double frac = static_cast<double>(st.now) / static_cast<double>(DRONE_PACE_T);
-            int budget_floor = e0 - DRONE_BURST -
-                               static_cast<int>((e0 - DRONE_BURST - DRONE_CAMERA_FLOOR) * frac);
+            int knee_t = st.horizon() - e0 / 6; // the workers' commit moment
+            int spend_by_knee = e0 * DRONE_PHASE1 / 1000;
+            int budget_floor;
+            if (DRONE_PHASE1 > 0 && st.now < knee_t)
+            {
+                double frac = static_cast<double>(st.now) / static_cast<double>(knee_t);
+                budget_floor = e0 - DRONE_BURST -
+                               static_cast<int>((spend_by_knee - DRONE_BURST) * frac);
+            }
+            else
+            {
+                int base = (DRONE_PHASE1 > 0) ? (e0 - spend_by_knee) : (e0 - DRONE_BURST);
+                int t0 = (DRONE_PHASE1 > 0) ? knee_t : 0;
+                double frac = static_cast<double>(st.now - t0) /
+                              static_cast<double>(max(1, DRONE_PACE_T - t0));
+                budget_floor = base - static_cast<int>((base - DRONE_CAMERA_FLOOR) * frac);
+            }
             floor_energy = max(DRONE_CAMERA_FLOOR, budget_floor);
         }
         // A parked drone is a 5x5 camera, which is only worth anything while

@@ -52,12 +52,12 @@ Current `main` HEAD, original config, **holdout seeds 940001–940500** (never u
 
 | Metric | Value | Start of this work |
 |---|---|---|
-| Completed | **12.18** | 8.83 |
-| Discovered | 13.32 | 14.11 |
+| Completed | **12.19** | 8.83 |
+| Discovered | 13.34 | 14.11 |
 | Conversion | **91 %** | 63 % |
 | P(completed ≥ 11) | **89.2 %** | 21.4 % |
-| P(completed ≥ 12) | **68.0 %** | 7.2 % |
-| Leftover worker energy | 3.5k / 48k | 6.1k |
+| P(completed ≥ 12) | **69.2 %** | 7.2 % |
+| Leftover worker energy | 2.4k / 48k | 6.1k |
 | Leftover drone energy | **0.2k / 24k** | 2.5k |
 Provided placeholder scheduler (random walk): ~7 discovered, **~1 completed**.
 
@@ -275,6 +275,7 @@ Second round (all paired, 300 seeds unless noted):
 | Drone pacing 1200 / 2000 / 1550 / 1850 after the strategy change | −0.59 disc / −0.22 comp / +0.07 comp for −0.18 disc / −0.18 comp |
 | Drone up-front burst 0 / 6000 | −0.06 comp for +0.13 disc / +0.05 comp for −0.21 disc — same trade either way, neither established |
 | Drone pacing 1600 / 1800 after the tail spend-down | ±0.00 / −0.06 — 1700 survives every re-check |
+| **Two-phase drone pacing keyed to the workers' commit moment** (compress the first pass into t<800, since within that window it makes no difference when a cell is first seen) | −0.18 to −0.30 discovered at every split tried (50/60/70 %), completions flat. The plausible-sounding argument is simply wrong: the value-greedy already orders first coverage ahead of re-coverage, and forcing more of the budget early just spends it on cells it would have reached anyway. |
 | Lowering the energy at which a worker stops counting as a possible server (1500 → 600, or → 2500) | exactly ±0.00 — the reach cap already dominates it |
 | Residual observation value in the dead zone at 0.15 or 0.5 | ±0.00 either way |
 | Worker patrol floor 800, late release at t=1000 | ±0.00 |
