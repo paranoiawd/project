@@ -82,6 +82,17 @@ namespace
     int PATROL_DISPERSE = 1200; // x1000 weight pushing patrols away from other workers
     const int PLAN_SLACK = 20;  // ticks of margin a route must finish inside
     int PLAN_ITERS = 12;        // local-search rounds per tick
+    int PLAN_RESERVE = 0;       // worker energy withheld from routes for tasks not
+                                // yet spawned; decays with the arrival ramp
+    int UNSEEN_BONUS = 0;       // x1000 extra mass on a cell nobody has ever seen
+    int OBS_ROUTE_PULL = 0;     // bend worker task routes through cells worth seeing
+    int LOCK_KEEP = 1;          // keep walking to a target already nearly reached
+    int FUTURE_W = 0;           // measured negative at 400 and 1000; kept only as a
+                                // documented dead end.  x1000 weight on where a route LEAVES a worker,
+                                // valued by how cheaply it could reach the next
+                                // task to spawn (uniform over the map)
+    int EXACT_MAX = 0;          // solve the fleet plan exactly when at most this many
+                                // free tasks are known (0 = always use local search)
     int PATROL_LATE_T = 1200;   // after this tick there is nothing left to save for
     int PATROL_LATE_ENERGY = 400;// so the patrol floor drops to here
     int DRONE_PACE_T = 1700;    // ticks over which a drone's fuel is spread (0 = no pacing)
@@ -132,6 +143,12 @@ namespace
         PATROL_START = envi("SCHED_T_PSTART", PATROL_START);
         PATROL_DISPERSE = envi("SCHED_T_PDISP", PATROL_DISPERSE);
         PLAN_ITERS = envi("SCHED_T_PITER", PLAN_ITERS);
+        PLAN_RESERVE = envi("SCHED_T_PRES", PLAN_RESERVE);
+        UNSEEN_BONUS = envi("SCHED_T_UNSEEN", UNSEEN_BONUS);
+        OBS_ROUTE_PULL = envi("SCHED_T_ORP", OBS_ROUTE_PULL);
+        EXACT_MAX = envi("SCHED_T_EXACT", EXACT_MAX);
+        FUTURE_W = envi("SCHED_T_FUT", FUTURE_W);
+        LOCK_KEEP = envi("SCHED_T_LOCK", LOCK_KEEP);
         PATROL_LATE_T = envi("SCHED_T_PLATE", PATROL_LATE_T);
         PATROL_LATE_ENERGY = envi("SCHED_T_PMEL", PATROL_LATE_ENERGY);
         WORKER_TRAVEL_CAP = envi("SCHED_T_WTC", WORKER_TRAVEL_CAP);
@@ -179,6 +196,8 @@ struct Scheduler::State
     map<int, int> owner;      // task id -> robot id (book assignment)
     map<int, int> first_seen; // task id -> tick it was first discovered
     map<int, vector<int>> prev_route; // robot id -> planned task ids, last tick
+    map<int, int> work_since;         // robot id -> tick it started its current job
+    map<int, int> prev_assigned;      // robot id -> task id it was walking to
 
     // drone sweep state
     map<int, pair<int, int>> drone_half; // drone id -> [x_lo, x_hi] band
@@ -255,6 +274,15 @@ struct Scheduler::State
                 // pull worker paths across free tasks: they get grabbed en route
                 if (use_magnet && type != 0 && !magnet.empty() && magnet[idx(vx, vy)])
                     w = max(10, w - TASK_MAGNET);
+                // A worker has to walk somewhere anyway; bending the route through
+                // cells worth observing is discovery it does not pay extra for.
+                // Only the routed map is bent -- the costing map stays clean.
+                if (use_magnet && type != 0 && OBS_ROUTE_PULL > 0 && !stale.empty())
+                {
+                    int disc = stale[idx(vx, vy)] * OBS_ROUTE_PULL / 1000;
+                    if (disc > 0)
+                        w = max(10, w - min(w - 10, disc));
+                }
                 int nd = top.first + w;
                 int v = idx(vx, vy);
                 if (nd < d[v])
@@ -328,6 +356,8 @@ struct Scheduler::State
                     continue;
                 int ls = last_seen[x][y];
                 int mass = (ls < 0) ? (1000 + ft) : (ft - spawned_frac(ls));
+                if (ls < 0 && UNSEEN_BONUS > 0)
+                    mass = mass * (1000 + UNSEEN_BONUS) / 1000;
                 if (mass <= 0)
                     continue;
                 double w = 1.0;
@@ -512,7 +542,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
 
     struct PW
     {
-        int rid, type, energy, t0;
+        int rid, type, energy, t0, reserve;
         bool working;
     };
     vector<PW> pw;
@@ -529,10 +559,20 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         p.working = (r.get_status() == ROBOT::STATUS::WORKING);
         p.energy = r.get_energy();
         p.t0 = 0;
+        // Tasks that have not spawned yet still have to be served by somebody.
+        // Committing every last unit to the tasks visible now is what leaves the
+        // fleet unable to reach a late arrival; the hold-back decays with the
+        // dispatcher's own arrival ramp and is gone once spawning has finished.
+        p.reserve = PLAN_RESERVE * (1000 - st.spawned_frac(st.now)) / 1000;
+        if (p.reserve > p.energy / 2)
+            p.reserve = p.energy / 2;
         if (p.working)
         {
-            // it still owes the rest of its current job; charge the whole of it,
-            // which is pessimistic by at most one task's work
+            // it still owes the REST of its current job -- charging the whole of
+            // it (as this used to) understates the worker by up to a full task's
+            // work every time it is mid-job, which is most of the time
+            if (st.work_since.find(r.id) == st.work_since.end())
+                st.work_since[r.id] = st.now;
             for (size_t q = 0; q < active_tasks.size(); ++q)
             {
                 const TASK *t = active_tasks[q].get();
@@ -541,8 +581,12 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                     int we = work_energy(*t, r.type);
                     if (we < PLAN_INF)
                     {
-                        p.energy -= we;
-                        p.t0 = we / 10;
+                        int spent = (st.now - st.work_since[r.id]) * 10;
+                        int left = we - spent;
+                        if (left < 10)
+                            left = 10;
+                        p.energy -= left;
+                        p.t0 = left / 10;
                     }
                     break;
                 }
@@ -550,6 +594,8 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
             if (p.energy < 0)
                 p.energy = 0;
         }
+        else
+            st.work_since.erase(r.id);
         pw.push_back(p);
     }
 
@@ -589,6 +635,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         {
             const PW &p = (*pw)[k];
             int e = 0, t = now + p.t0, prev = -1;
+            int budget = p.energy - p.reserve;
             for (size_t i = 0; i < seq.size(); ++i)
             {
                 int j = seq[i];
@@ -596,7 +643,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                 if (trav >= PLAN_INF)
                     return false;
                 int we = work_energy(*(*tasks)[j], static_cast<ROBOT::TYPE>(p.type));
-                if (we >= PLAN_INF || e + trav + we > p.energy)
+                if (we >= PLAN_INF || e + trav + we > budget)
                     return false;
                 t += (trav + we) / 10;
                 if (t > horizon - PLAN_SLACK)
@@ -616,7 +663,218 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     ok.now = st.now;
     ok.horizon = horizon_t;
 
+    // ---- exact plan, when the known task set is small enough ---------------
+    // The local search below is insertion + relocate/swap/2-opt, and measured
+    // offline against a subset-DP solver it lands ~1.1 tasks short of the true
+    // optimum.  With few enough free tasks the optimum is directly computable:
+    // for each worker, a DP over (subset, last visited) carrying the Pareto
+    // frontier of (energy, completion time) -- the two are not interchangeable,
+    // because waiting for a task to be reachable costs time but no energy --
+    // then a subset partition across workers maximising the count and breaking
+    // ties on total energy.
+    bool exact_done = false;
+    if (EXACT_MAX > 0 && !tasks.empty() && static_cast<int>(tasks.size()) <= EXACT_MAX &&
+        pw.size() <= 6)
+    {
+        const int nfree = static_cast<int>(tasks.size());
+        const int FULL = 1 << nfree;
+        // Where a route leaves a worker matters: the next task to spawn is
+        // uniform over the map, so a worker parked where the map is cheap to
+        // reach is worth more than one left in a corner.  Scaled by how much
+        // spawning is still to come.
+        const int fut_scale = FUTURE_W * (1000 - st.spawned_frac(st.now)) / 1000;
+        vector<vector<int> > fut_end(pw.size(), vector<int>(nfree, 0));
+        vector<int> fut_own(pw.size(), 0);
+        if (fut_scale > 0)
+        {
+            for (size_t k = 0; k < pw.size(); ++k)
+            {
+                for (int j = 0; j < nfree; ++j)
+                {
+                    const vector<int> &dj =
+                        st.dist_from_task(tasks[j]->id, pw[k].type, tasks[j]->coord);
+                    long long sum = 0;
+                    int cells = 0;
+                    for (int c = 0; c < st.n * st.n; ++c)
+                    {
+                        if (dj[c] >= PLAN_INF)
+                            continue;
+                        sum += dj[c];
+                        ++cells;
+                    }
+                    fut_end[k][j] = cells ? static_cast<int>(sum / cells) : 6000;
+                    fut_end[k][j] = fut_end[k][j] * fut_scale / 1000;
+                }
+                const vector<int> &d0 = st.dist_c[pw[k].rid];
+                long long sum = 0;
+                int cells = 0;
+                for (int c = 0; c < st.n * st.n; ++c)
+                {
+                    if (d0[c] >= PLAN_INF)
+                        continue;
+                    sum += d0[c];
+                    ++cells;
+                }
+                fut_own[k] = (cells ? static_cast<int>(sum / cells) : 6000) * fut_scale / 1000;
+            }
+        }
+        // per worker: best[S] = minimal energy to serve exactly S (PLAN_INF = can't)
+        vector<vector<int>> bestE(pw.size(), vector<int>(FULL, PLAN_INF));
+        // pareto[S * nfree + last] = frontier of (energy, finish tick)
+        vector<vector<pair<int, int> > > par;
+        for (size_t k = 0; k < pw.size(); ++k)
+        {
+            par.assign(static_cast<size_t>(FULL) * nfree, vector<pair<int, int> >());
+            for (int j = 0; j < nfree; ++j)
+            {
+                vector<int> one(1, j);
+                int e = 0;
+                if (!ok(k, one, &e))
+                    continue;
+                par[static_cast<size_t>(1 << j) * nfree + j].push_back(
+                    make_pair(e, st.now + pw[k].t0 + e / 10));
+                if (e < bestE[k][1 << j])
+                    bestE[k][1 << j] = e;
+            }
+            for (int S = 1; S < FULL; ++S)
+                for (int last = 0; last < nfree; ++last)
+                {
+                    if (!((S >> last) & 1))
+                        continue;
+                    const vector<pair<int, int> > cur = par[static_cast<size_t>(S) * nfree + last];
+                    if (cur.empty())
+                        continue;
+                    for (int j = 0; j < nfree; ++j)
+                    {
+                        if ((S >> j) & 1)
+                            continue;
+                        int legc = leg(k, last, j);
+                        int we = work_energy(*tasks[j], static_cast<ROBOT::TYPE>(pw[k].type));
+                        if (legc >= PLAN_INF || we >= PLAN_INF)
+                            continue;
+                        int S2 = S | (1 << j);
+                        for (size_t c = 0; c < cur.size(); ++c)
+                        {
+                            int e = cur[c].first + legc + we;
+                            if (e > pw[k].energy - pw[k].reserve)
+                                continue;
+                            int t = cur[c].second + (legc + we) / 10;
+                            if (t > horizon_t - PLAN_SLACK)
+                                continue;
+                            // dominance prune
+                            vector<pair<int, int> > &v = par[static_cast<size_t>(S2) * nfree + j];
+                            bool dom = false;
+                            for (size_t q = 0; q < v.size() && !dom; ++q)
+                                if (v[q].first <= e && v[q].second <= t)
+                                    dom = true;
+                            if (dom)
+                                continue;
+                            for (size_t q = 0; q < v.size();)
+                            {
+                                if (v[q].first >= e && v[q].second >= t)
+                                    v.erase(v.begin() + q);
+                                else
+                                    ++q;
+                            }
+                            v.push_back(make_pair(e, t));
+                            if (e + fut_end[k][j] < bestE[k][S2])
+                                bestE[k][S2] = e + fut_end[k][j];
+                        }
+                    }
+                }
+        }
+        // partition: maximise served count, tie-break on total energy
+        const int NEG = -1;
+        vector<int> cnt(FULL, NEG), eng(FULL, PLAN_INF);
+        vector<int> pick(static_cast<size_t>(FULL) * pw.size(), 0);
+        cnt[0] = 0;
+        eng[0] = 0;
+        for (size_t k = 0; k < pw.size(); ++k)
+        {
+            vector<int> ncnt(FULL, NEG), neng(FULL, PLAN_INF);
+            vector<int> npick(pick.size(), 0);
+            for (int S = 0; S < FULL; ++S)
+            {
+                if (cnt[S] < 0)
+                    continue;
+                {   // worker k serves nothing and stays where it is
+                    int e2 = eng[S] + fut_own[k];
+                    if (cnt[S] > ncnt[S] || (cnt[S] == ncnt[S] && e2 < neng[S]))
+                    {
+                        ncnt[S] = cnt[S];
+                        neng[S] = e2;
+                        for (size_t q = 0; q < pw.size(); ++q)
+                            npick[static_cast<size_t>(S) * pw.size() + q] =
+                                pick[static_cast<size_t>(S) * pw.size() + q];
+                        npick[static_cast<size_t>(S) * pw.size() + k] = 0;
+                    }
+                }
+                int rest = (FULL - 1) & ~S;
+                for (int T = rest; T; T = (T - 1) & rest)
+                {
+                    if (bestE[k][T] >= PLAN_INF)
+                        continue;
+                    int c2 = cnt[S] + __builtin_popcount(T);
+                    int e2 = eng[S] + bestE[k][T];
+                    int U = S | T;
+                    if (c2 > ncnt[U] || (c2 == ncnt[U] && e2 < neng[U]))
+                    {
+                        ncnt[U] = c2;
+                        neng[U] = e2;
+                        for (size_t q = 0; q < pw.size(); ++q)
+                            npick[static_cast<size_t>(U) * pw.size() + q] =
+                                pick[static_cast<size_t>(S) * pw.size() + q];
+                        npick[static_cast<size_t>(U) * pw.size() + k] = T;
+                    }
+                }
+            }
+            cnt.swap(ncnt);
+            eng.swap(neng);
+            pick.swap(npick);
+        }
+        int bestS = 0;
+        for (int S = 0; S < FULL; ++S)
+            if (cnt[S] > cnt[bestS] || (cnt[S] == cnt[bestS] && eng[S] < eng[bestS]))
+                bestS = S;
+        // reconstruct each worker's order over its assigned subset, greedily by
+        // cheapest feasible extension (subsets are small; verified by ok())
+        for (size_t k = 0; k < pw.size(); ++k)
+        {
+            int T = pick[static_cast<size_t>(bestS) * pw.size() + k];
+            route[k].clear();
+            while (T)
+            {
+                int bj = -1, be = PLAN_INF;
+                for (int j = 0; j < nfree; ++j)
+                {
+                    if (!((T >> j) & 1))
+                        continue;
+                    vector<int> trial = route[k];
+                    trial.push_back(j);
+                    int rest = T & ~(1 << j);
+                    // must stay completable: append the rest in any feasible order
+                    int e = 0;
+                    if (!ok(k, trial, &e))
+                        continue;
+                    if (rest && bestE[k][T] >= PLAN_INF)
+                        continue;
+                    if (e < be)
+                    {
+                        be = e;
+                        bj = j;
+                    }
+                }
+                if (bj < 0)
+                    break;
+                route[k].push_back(bj);
+                T &= ~(1 << bj);
+            }
+        }
+        exact_done = true;
+    }
+
     vector<char> placed(tasks.size(), 0);
+    if (!exact_done)
     {
         // seed from last tick's routes: same plan unless something really
         // changed, which is what keeps workers from re-targeting every tick
@@ -643,8 +901,12 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         }
     }
 
+    for (size_t k = 0; k < route.size() && exact_done; ++k)
+        for (size_t q = 0; q < route[k].size(); ++q)
+            placed[route[k][q]] = 1;
+
     // insertion: repeatedly take the globally cheapest feasible placement
-    for (;;)
+    for (; !exact_done;)
     {
         int best_inc = PLAN_INF, bj = -1, bp = -1;
         size_t bk = 0;
@@ -681,7 +943,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     }
 
     // local search: cheaper routes free the energy that lets one more task fit
-    for (int iter = 0; iter < PLAN_ITERS; ++iter)
+    for (int iter = 0; iter < PLAN_ITERS && !exact_done; ++iter)
     {
         bool improved = false;
         for (size_t k = 0; k < pw.size() && !improved; ++k)
@@ -761,11 +1023,41 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         }
     }
 
+    // Commitment.  The exact solver rebuilds every route from scratch each tick,
+    // so two near-equal plans can make a worker flip targets and throw away the
+    // energy it already walked.  A target already nearly reached stays first.
+    if (LOCK_KEEP)
+    {
+        for (size_t k = 0; k < pw.size(); ++k)
+        {
+            if (pw[k].working || route[k].empty())
+                continue;
+            map<int, int>::iterator a = st.prev_assigned.find(pw[k].rid);
+            if (a == st.prev_assigned.end())
+                continue;
+            for (size_t q = 1; q < route[k].size(); ++q)
+            {
+                if (tasks[route[k][q]]->id != a->second)
+                    continue;
+                if (st.dist_c[pw[k].rid][st.idx(tasks[route[k][q]]->coord)] > LOCK_DIST)
+                    break;
+                vector<int> trial = route[k];
+                int j = trial[q];
+                trial.erase(trial.begin() + q);
+                trial.insert(trial.begin(), j);
+                if (ok(k, trial, 0))
+                    route[k].swap(trial);
+                break;
+            }
+        }
+    }
+
     // ---- hand the first leg of each route to its worker --------------------
     map<int, int> new_owner;
     for (int i = 0; i <= max_id; ++i)
         st.assigned[i] = -1;
     st.prev_route.clear();
+    map<int, int> new_assigned;
     for (size_t k = 0; k < pw.size(); ++k)
     {
         vector<int> ids;
@@ -785,12 +1077,14 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         if (travel > WORKER_TRAVEL_CAP && !waited_out && !endgame && !sole_server[j])
             continue;
         new_owner[tasks[j]->id] = r.id;
+        new_assigned[r.id] = tasks[j]->id;
         st.assigned[r.id] = tasks[j]->id;
         Coord pos = (r.get_status() == ROBOT::STATUS::MOVING) ? r.get_target_coord() : r.get_coord();
         st.next_step[r.id] = st.first_step(st.par[r.id], pos, tasks[j]->coord);
     }
 
     st.owner.swap(new_owner);
+    st.prev_assigned.swap(new_assigned);
 
     // serve_dist[c] = cheapest travel energy any worker still able to act could
     // pay to reach c; it is what turns raw observation value into value that

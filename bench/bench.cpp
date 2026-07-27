@@ -62,6 +62,11 @@ int main(int argc, char **argv)
     unsigned int seed = (argc > 1) ? static_cast<unsigned int>(strtoul(argv[1], nullptr, 10)) : 0u;
     const int NUM_MAX_TASKS = (argc > 2) ? atoi(argv[2]) : 20;
     const bool ORACLE = (argc > 3) && string(argv[3]) == string("oracle");
+    // "bound": run normally, then solve exactly for the best completion count
+    // that was ever available GIVEN the discovery times this run produced,
+    // with free optimal routing and no charge for observation.
+    const bool BOUND = (argc > 3) && string(argv[3]) == string("bound");
+    const bool NOFORE = getenv("BENCH_BOUND_NOFORE") != nullptr;
 
     constexpr int MAP_SIZE = 20;
     constexpr int NUM_ROBOT = 6;
@@ -86,6 +91,14 @@ int main(int argc, char **argv)
     auto &active_tasks = map.get_active_tasks();
     Scheduler scheduler;
     TASKDISPATCHER taskdispatcher(map, TIME_MAX);
+    vector<Coord> w0pos;
+    vector<int> w0type;
+    for (auto &r : robots)
+        if (r->type != ROBOT::TYPE::DRONE)
+        {
+            w0pos.push_back(r->get_coord());
+            w0type.push_back(static_cast<int>(r->type));
+        }
 
     // instrumentation: per-task spawn/discovery times + affordability windows
     vector<int> spawn_time, disc_time, first_affordable, last_affordable, affordable_ticks;
@@ -246,6 +259,121 @@ int main(int argc, char **argv)
     cout << seed << "," << NUM_MAX_TASKS << "," << created << "," << discovered
          << "," << completed << "," << map.get_exhausted_robot_num() << "," << time
          << "," << worker_energy << "," << drone_energy << "," << drone_cell_cost << endl;
+
+    if (BOUND)
+    {
+        set<Coord> all;
+        for (int x = 0; x < MAP_SIZE; ++x)
+            for (int y = 0; y < MAP_SIZE; ++y)
+                all.emplace(x, y);
+        map.update_coords(all);
+        const vector<vector<vector<int>>> &cm = map.get_known_cost_map();
+        auto &ts = map.get_tasks();
+        int nt = static_cast<int>(ts.size());
+        int NW = static_cast<int>(w0pos.size());
+        vector<Coord> tp;
+        vector<int> rel(nt);
+        vector<vector<int>> wk(nt, vector<int>(3, INT_MAX / 4));
+        for (int i = 0; i < nt; ++i)
+        {
+            tp.push_back(ts[i]->coord);
+            rel[i] = (disc_time[i] < 0) ? INT_MAX / 4 : disc_time[i];
+            for (int ty = 1; ty <= 2; ++ty)
+            {
+                int c = ts[i]->get_cost(static_cast<ROBOT::TYPE>(ty));
+                int k = (c + 9) / 10;
+                if (k < 1) k = 1;
+                wk[i][ty] = k * 10;
+            }
+        }
+        vector<vector<int>> ds(NW, vector<int>(nt, INT_MAX / 4));
+        for (int w = 0; w < NW; ++w)
+        {
+            vector<int> d = true_dijkstra(map, MAP_SIZE, w0pos[w], static_cast<ROBOT::TYPE>(w0type[w]));
+            for (int j = 0; j < nt; ++j) ds[w][j] = d[tp[j].x * MAP_SIZE + tp[j].y];
+        }
+        vector<vector<vector<int>>> dt(3, vector<vector<int>>(nt, vector<int>(nt, INT_MAX / 4)));
+        for (int ty = 1; ty <= 2; ++ty)
+            for (int i = 0; i < nt; ++i)
+            {
+                vector<int> d = true_dijkstra(map, MAP_SIZE, tp[i], static_cast<ROBOT::TYPE>(ty));
+                for (int j = 0; j < nt; ++j) dt[ty][i][j] = d[tp[j].x * MAP_SIZE + tp[j].y];
+            }
+        int FULLM = 1 << nt;
+        vector<vector<char>> feas(NW, vector<char>(FULLM, 0));
+        for (int w = 0; w < NW; ++w)
+        {
+            int ty = w0type[w];
+            vector<vector<pair<int,int>>> par((size_t)FULLM * nt);
+            auto addp = [&](size_t key, int e, int t) {
+                auto &v = par[key];
+                for (auto &q : v) if (q.first <= e && q.second <= t) return;
+                for (size_t i = 0; i < v.size();) { if (v[i].first >= e && v[i].second >= t) v.erase(v.begin()+i); else ++i; }
+                v.push_back(make_pair(e, t));
+            };
+            for (int j = 0; j < nt; ++j)
+            {
+                if (ds[w][j] >= INT_MAX/8 || rel[j] >= INT_MAX/8) continue;
+                int e = ds[w][j] + wk[j][ty];
+                if (e > ROBOT_ENERGY) continue;
+                int dep0 = NOFORE ? rel[j] : 0;
+                int st2 = max(dep0 + ds[w][j] / 10, rel[j]);
+                int t = st2 + wk[j][ty] / 10;
+                if (t > TIME_MAX) continue;
+                addp((size_t)(1 << j) * nt + j, e, t);
+                feas[w][1 << j] = 1;
+            }
+            vector<int> ord;
+            for (int S = 1; S < FULLM; ++S) ord.push_back(S);
+            sort(ord.begin(), ord.end(), [](int a, int b){ return __builtin_popcount(a) < __builtin_popcount(b); });
+            for (int S : ord)
+                for (int last = 0; last < nt; ++last)
+                {
+                    if (!((S >> last) & 1)) continue;
+                    auto cur = par[(size_t)S * nt + last];
+                    if (cur.empty()) continue;
+                    feas[w][S] = 1;
+                    for (int j = 0; j < nt; ++j)
+                    {
+                        if ((S >> j) & 1) continue;
+                        if (dt[ty][last][j] >= INT_MAX/8 || rel[j] >= INT_MAX/8) continue;
+                        for (auto &c : cur)
+                        {
+                            int e = c.first + dt[ty][last][j] + wk[j][ty];
+                            if (e > ROBOT_ENERGY) continue;
+                            int dep = c.second;
+                            if (NOFORE && dep < rel[j]) dep = rel[j];
+                            int st2 = max(dep + dt[ty][last][j] / 10, rel[j]);
+                            int t = st2 + wk[j][ty] / 10;
+                            if (t > TIME_MAX) continue;
+                            addp((size_t)(S | (1 << j)) * nt + j, e, t);
+                        }
+                    }
+                }
+        }
+        vector<signed char> dp(FULLM, -1), ndp(FULLM, -1);
+        dp[0] = 0;
+        for (int w = 0; w < NW; ++w)
+        {
+            ndp = dp;
+            for (int S = 0; S < FULLM; ++S)
+            {
+                if (dp[S] < 0) continue;
+                int rest = (FULLM - 1) & ~S;
+                for (int T = rest; T; T = (T - 1) & rest)
+                {
+                    if (!feas[w][T]) continue;
+                    int v = dp[S] + __builtin_popcount(T);
+                    if (v > ndp[S | T]) ndp[S | T] = (signed char)v;
+                }
+            }
+            dp.swap(ndp);
+        }
+        int bnd = 0;
+        for (int S = 0; S < FULLM; ++S) if (dp[S] > bnd) bnd = dp[S];
+        cout << "BOUND," << seed << "," << completed << "," << discovered << "," << bnd << endl;
+        return 0;
+    }
 
     if (argc > 3) // verbose dump for failure analysis
     {
