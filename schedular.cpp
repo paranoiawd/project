@@ -63,7 +63,7 @@ namespace
     const int EST_CELL_COST[3] = {160, 299, 448};     // expected cell cost per type (drone/cat/wheel)
     double ASSIGN_STICKY = 0.85;                // cost discount for keeping an assignment
     const int WORKER_MIN_ENERGY = 30;                 // below this a worker is effectively retired
-    int WORKER_TRAVEL_CAP = 3800;               // normal per-assignment travel budget
+    int WORKER_TRAVEL_CAP = 2400;               // normal per-assignment travel budget
     const int DRONE_CAMERA_FLOOR = 400;               // drones never spend below this (parked sensor)
     const int DRONE_STEP_EST = 300;                   // rough energy for one drone step
     // Observation-value and patrol knobs.  These are readable from the
@@ -86,7 +86,6 @@ namespace
                                 // yet spawned; decays with the arrival ramp
     int UNSEEN_BONUS = 0;       // x1000 extra mass on a cell nobody has ever seen
     int OBS_ROUTE_PULL = 0;     // bend worker task routes through cells worth seeing
-    int LOCK_KEEP = 1;          // keep walking to a target already nearly reached
     int FUTURE_W = 0;           // measured negative at 400 and 1000; kept only as a
                                 // documented dead end.  x1000 weight on where a route LEAVES a worker,
                                 // valued by how cheaply it could reach the next
@@ -111,7 +110,7 @@ namespace
         const char *v = getenv(k);
         return v ? atoi(v) : d;
     }
-    int STARVE_AGE = 250;                       // discovered-but-unserved ticks before the
+    int STARVE_AGE = 600;                       // discovered-but-unserved ticks before the
                                                       // travel cap is waived for a task
     int TASK_MAGNET = 350;                      // path bonus for stepping onto a free task
     const int LOCK_DIST = 700;                        // don't rebook a nearly-reached assignment
@@ -148,7 +147,6 @@ namespace
         OBS_ROUTE_PULL = envi("SCHED_T_ORP", OBS_ROUTE_PULL);
         EXACT_MAX = envi("SCHED_T_EXACT", EXACT_MAX);
         FUTURE_W = envi("SCHED_T_FUT", FUTURE_W);
-        LOCK_KEEP = envi("SCHED_T_LOCK", LOCK_KEEP);
         PATROL_LATE_T = envi("SCHED_T_PLATE", PATROL_LATE_T);
         PATROL_LATE_ENERGY = envi("SCHED_T_PMEL", PATROL_LATE_ENERGY);
         WORKER_TRAVEL_CAP = envi("SCHED_T_WTC", WORKER_TRAVEL_CAP);
@@ -197,7 +195,6 @@ struct Scheduler::State
     map<int, int> first_seen; // task id -> tick it was first discovered
     map<int, vector<int>> prev_route; // robot id -> planned task ids, last tick
     map<int, int> work_since;         // robot id -> tick it started its current job
-    map<int, int> prev_assigned;      // robot id -> task id it was walking to
 
     // drone sweep state
     map<int, pair<int, int>> drone_half; // drone id -> [x_lo, x_hi] band
@@ -1023,41 +1020,11 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         }
     }
 
-    // Commitment.  The exact solver rebuilds every route from scratch each tick,
-    // so two near-equal plans can make a worker flip targets and throw away the
-    // energy it already walked.  A target already nearly reached stays first.
-    if (LOCK_KEEP)
-    {
-        for (size_t k = 0; k < pw.size(); ++k)
-        {
-            if (pw[k].working || route[k].empty())
-                continue;
-            map<int, int>::iterator a = st.prev_assigned.find(pw[k].rid);
-            if (a == st.prev_assigned.end())
-                continue;
-            for (size_t q = 1; q < route[k].size(); ++q)
-            {
-                if (tasks[route[k][q]]->id != a->second)
-                    continue;
-                if (st.dist_c[pw[k].rid][st.idx(tasks[route[k][q]]->coord)] > LOCK_DIST)
-                    break;
-                vector<int> trial = route[k];
-                int j = trial[q];
-                trial.erase(trial.begin() + q);
-                trial.insert(trial.begin(), j);
-                if (ok(k, trial, 0))
-                    route[k].swap(trial);
-                break;
-            }
-        }
-    }
-
     // ---- hand the first leg of each route to its worker --------------------
     map<int, int> new_owner;
     for (int i = 0; i <= max_id; ++i)
         st.assigned[i] = -1;
     st.prev_route.clear();
-    map<int, int> new_assigned;
     for (size_t k = 0; k < pw.size(); ++k)
     {
         vector<int> ids;
@@ -1077,14 +1044,12 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         if (travel > WORKER_TRAVEL_CAP && !waited_out && !endgame && !sole_server[j])
             continue;
         new_owner[tasks[j]->id] = r.id;
-        new_assigned[r.id] = tasks[j]->id;
         st.assigned[r.id] = tasks[j]->id;
         Coord pos = (r.get_status() == ROBOT::STATUS::MOVING) ? r.get_target_coord() : r.get_coord();
         st.next_step[r.id] = st.first_step(st.par[r.id], pos, tasks[j]->coord);
     }
 
     st.owner.swap(new_owner);
-    st.prev_assigned.swap(new_assigned);
 
     // serve_dist[c] = cheapest travel energy any worker still able to act could
     // pay to reach c; it is what turns raw observation value into value that

@@ -399,7 +399,28 @@ int main(int argc, char **argv)
             for (auto &o : col)
                 if (o == OBJECT::UNKNOWN)
                     ++unknown_cells;
-        cout << "unknown cells at end: " << unknown_cells << "/" << MAP_SIZE * MAP_SIZE << endl;
+        {
+            // Of the cells never observed, how many were actually open ground?
+            // A wall nobody ever saw is not a missed opportunity.  The known map
+            // reports -1 for an unobserved cell, so the true map has to be
+            // revealed first, after recording which cells were still unknown.
+            vector<Coord> unk;
+            for (int x = 0; x < MAP_SIZE; ++x)
+                for (int y = 0; y < MAP_SIZE; ++y)
+                    if (kom[x][y] == OBJECT::UNKNOWN)
+                        unk.emplace_back(x, y);
+            set<Coord> all;
+            for (int x = 0; x < MAP_SIZE; ++x)
+                for (int y = 0; y < MAP_SIZE; ++y)
+                    all.emplace(x, y);
+            map.update_coords(all);
+            int unk_open = 0;
+            for (size_t q = 0; q < unk.size(); ++q)
+                if (map.get_cost(unk[q], ROBOT::TYPE::CATERPILLAR) != INFINITE)
+                    ++unk_open;
+            cout << "unknown cells at end: " << unknown_cells << "/" << MAP_SIZE * MAP_SIZE
+                 << " (non-wall: " << unk_open << ")" << endl;
+        }
         {
             int hole = 0, timing = 0;
             for (auto &tp : map.get_tasks())
