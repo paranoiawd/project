@@ -93,7 +93,7 @@ namespace
     int EXACT_MAX = 16;         // solve the fleet plan exactly when at most this many
                                 // free tasks are known (0 = always use local search)
     int PATROL_LATE_T = 1200;   // after this tick there is nothing left to save for
-    int PATROL_LATE_ENERGY = 400;// so the patrol floor drops to here
+    int PATROL_LATE_ENERGY = 50; // so the patrol floor drops to here
     int DRONE_PACE_T = 1700;    // ticks over which a drone's fuel is spread (0 = no pacing)
     int DRONE_BURST = 3000;     // fuel a drone may spend ahead of that line
     double SERVE_W_DEAD = 0.25; // residual weight once nothing found here could

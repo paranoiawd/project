@@ -1085,7 +1085,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         const ROBOT &r = *robots[i];
         if (r.type == ROBOT::TYPE::DRONE || r.get_status() == ROBOT::STATUS::EXHAUSTED)
             continue;
-        if (r.get_energy() < 1500 || st.dist_c[r.id].empty())
+        if (r.get_energy() < SERVE_MIN_ENERGY || st.dist_c[r.id].empty())
             continue; // nearly-spent workers won't serve new finds
         for (int c = 0; c < st.n * st.n; ++c)
         {

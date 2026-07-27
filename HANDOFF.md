@@ -52,12 +52,13 @@ Current `main` HEAD, original config, **holdout seeds 940001–940500** (never u
 
 | Metric | Value | Start of this work |
 |---|---|---|
-| Completed | **11.95** | 8.83 |
-| Discovered | 13.00 | 14.11 |
-| Conversion | **92 %** | 63 % |
-| P(completed ≥ 11) | **85.2 %** | 21.4 % |
-| P(completed ≥ 12) | **61.6 %** | 7.2 % |
-| Leftover worker energy | 4.4k / 48k | 6.1k |
+| Completed | **12.18** | 8.83 |
+| Discovered | 13.32 | 14.11 |
+| Conversion | **91 %** | 63 % |
+| P(completed ≥ 11) | **89.2 %** | 21.4 % |
+| P(completed ≥ 12) | **68.0 %** | 7.2 % |
+| Leftover worker energy | 3.5k / 48k | 6.1k |
+| Leftover drone energy | **0.2k / 24k** | 2.5k |
 Provided placeholder scheduler (random walk): ~7 discovered, **~1 completed**.
 
 ## 3a. THE CEILING — read this before accepting any completion target
@@ -100,8 +101,8 @@ before it is discovered.)
 |---|---|
 | We discover | 12.96 |
 | We complete | 11.64 |
-| **Best available given our own discovery** | **12.08** |
-| Routing gap | **0.27** — 129 of 200 seeds already match or beat it |
+| **Best available given our own discovery** | **12.22** |
+| Routing gap | **0.23** — 130 of 200 seeds already match or beat it |
 
 **Routing is essentially finished.** Everything left is observation — but see the next
 section before assuming that means "discover more".
@@ -113,8 +114,8 @@ scheduler, which discovers 14.12):
 
 | 200 seeds | current build | discovery-maximal build |
 |---|---|---|
-| Discovered | 12.99 | **14.12** |
-| Completed | 11.81 | 8.72 |
+| Discovered | 13.12 | **14.12** |
+| Completed | 11.99 | 8.72 |
 | **Max possible given that discovery timeline** | **12.07** | **10.65** |
 
 The discovery-maximal build finds 1.2 more tasks and its *ceiling* is 1.4 lower than what
@@ -131,7 +132,7 @@ more" is a goal to make completions worse.
 | Beyond fleet energy/time even for the exact omniscient optimum | 0.92 | impossible |
 | **⇒ exact ceiling with perfect information** | **14.97** | |
 | Tasks we never discover in time to serve | ~2.9 | **the remaining target** |
-| Routing, measured against our own discovery timeline | 0.27 | closed |
+| Routing, measured against our own discovery timeline | 0.23 | closed |
 
 ## 3b. Why the shape of the solution is what it is
 
@@ -273,6 +274,10 @@ Second round (all paired, 300 seeds unless noted):
 | Re-sweeping the observation weights after the strategy change (`SERVE_W_HI` 4.0, `SERVE_W_LO` 0.4, `SERVE_RAMP` 450) | −0.10 / ±0.00 / −0.02 |
 | Drone pacing 1200 / 2000 / 1550 / 1850 after the strategy change | −0.59 disc / −0.22 comp / +0.07 comp for −0.18 disc / −0.18 comp |
 | Drone up-front burst 0 / 6000 | −0.06 comp for +0.13 disc / +0.05 comp for −0.21 disc — same trade either way, neither established |
+| Drone pacing 1600 / 1800 after the tail spend-down | ±0.00 / −0.06 — 1700 survives every re-check |
+| Lowering the energy at which a worker stops counting as a possible server (1500 → 600, or → 2500) | exactly ±0.00 — the reach cap already dominates it |
+| Residual observation value in the dead zone at 0.15 or 0.5 | ±0.00 either way |
+| Worker patrol floor 800, late release at t=1000 | ±0.00 |
 | Dropping the sole-server promotion | ±0.00 |
 | Plan finishing margin 10 or 20 ticks instead of 0 | −0.05 / −0.12 |
 | Giving up a whole worker as a full-time scout | **−1.6 completed at one, −3.9 at two — and discovery *falls* too** (12.45 vs 13.02). Trading service capacity for observation loses at every scale tested. |
@@ -306,7 +311,14 @@ both, so the frontier ends around 2000.
 that governs us, given the discovery we actually achieve, is **12.07**, and we are at 11.69.
 Set targets against those, and expect the next whole task to be hard.
 
-1. **Observation is now the only meaningful lever** — the routing gap is 0.43 and 92 of 200
+0. **The pattern that keeps paying is "find a reserve guarding a future that no longer
+   exists, and spend it".** The drone camera floor guarded against missing a spawn — worth
+   nothing once the dispatcher is done, and collapsing it was worth +0.22 completed *and*
+   +0.23 discovered at once, which almost nothing else here does. The worker commit moment
+   is the same idea in reverse (hold while the energy is scarce, spend when it could not
+   all be used anyway). If you find another such reserve, it is probably the best-value
+   thing on this list.
+1. **Observation is otherwise the only meaningful lever** — the routing gap is 0.43 and 92 of 200
    seeds are already optimal. We discover 13.0 of 16. Of the ~3 we miss, ~1.1 sit on cells
    nobody ever observed (22.8 open-ground cells per run are never seen) and the rest are timing
    misses, where the cell was seen but before the task spawned there.
@@ -359,7 +371,8 @@ Seeds already spent: tuning 1–400 and 500001–500300; holdouts 10001+, 20001+
 | `58ad564` | exact fleet plan added (but shipped switched off) | — | — | |
 | `1bfbea9` | hold the workers, then go all in | 11.44 | 12.93 | 930001–930500 |
 | `561cbea` | exact plan actually enabled | 11.69 | 12.99 | 940001–940500 |
-| **HEAD** | **commit moment derived, not tuned** | **11.95** | **13.00** | **940001–940500** |
+| `5b52680` | commit moment derived, not tuned | 11.95 | 13.00 | 940001–940500 |
+| **HEAD** | **spend reserves that guard a future that is over** | **12.18** | **13.32** | **940001–940500** |
 
 The `ac88b21` row is this session's re-measurement of that build's profile, not the number the
 session that produced it reported (9.73 / 10.90 on its own seed set) — different seeds, so compare
