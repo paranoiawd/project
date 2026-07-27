@@ -48,81 +48,90 @@ Observation and completion are paid for out of the same pool.
 
 ## 3. Where performance stands today (measured)
 
-Current `main` HEAD, original config, **holdout seeds 920001–920500** (never used for tuning):
+Current `main` HEAD, original config, **holdout seeds 940001–940500** (never used for anything):
 
-| Metric | Value | Pre-session HEAD |
+| Metric | Value | Start of this work |
 |---|---|---|
-| Completed | **10.58** | 8.83 |
-| Discovered | 12.49 | 14.11 |
-| Conversion | 85 % | 63 % |
-| P(completed ≥ 11) | **54.4 %** | 21.4 % |
-| P(completed ≥ 12) | **29.4 %** | 7.2 % |
-| Leftover worker energy | 4.0k / 48k | 6.1k |
+| Completed | **11.69** | 8.83 |
+| Discovered | 12.99 | 14.11 |
+| Conversion | **90 %** | 63 % |
+| P(completed ≥ 11) | **76.8 %** | 21.4 % |
+| P(completed ≥ 12) | **53.6 %** | 7.2 % |
+| Leftover worker energy | 4.6k / 48k | 6.1k |
 
+Second holdout (930001–930500) agrees: 11.76 / 12.91.
 Provided placeholder scheduler (random walk): ~7 discovered, **~1 completed**.
 
 ## 3a. THE CEILING — read this before accepting any completion target
 
-`bench/plan.cpp` solves each instance **offline and to convergence**: it knows the
-whole map, every task's position and release time, routes four workers optimally with
-insertion + relocate/swap/2-opt over hundreds of restarts, and **spends nothing at all on
-observation**. It is not a scheduler; it exists to separate "our router is short" from
-"the fleet cannot".
+**A previous version of this file claimed the ceiling was 14.12 and that 16/16 was
+impossible. That was wrong and the reasoning was unsound**, so if you have read an older
+copy, discard it. `bench/plan.cpp` is insertion + local search: its answer is a solution,
+therefore a *lower* bound on the optimum, and a lower bound proves nothing about what
+cannot be done. Measured against a real solver it was 1.1 tasks short on average and up
+to 5 on individual seeds.
 
-**500 seeds, no clairvoyant pre-positioning** (a worker may not set off toward a task
-before that task exists — the one concession to realism):
+`bench/exact.cpp` solves the instance **exactly**, by subset DP: for each worker a DP over
+(subset, last visited) carrying the Pareto frontier of (energy, completion time) — the two
+are not interchangeable, because waiting for a release costs time but no energy — then an
+exact partition across the four workers. It is a *relaxation* of the simulator (everything
+known from t=0, routing free, nothing spent on observation, the simulator's one-tick
+arrive-then-start gap ignored), so its answer is a genuine **upper bound**.
 
-| | |
+**500 seeds:**
+
+| | pre-positioning allowed | no pre-positioning |
+|---|---|---|
+| Mean optimum | 15.21 | **14.97** |
+| P(= 16) | 46.4 % | 34.6 % |
+| P(≥ 15) | 81.0 % | 72.6 % |
+| Worst seed | 12 | 12 |
+
+So 16/16 *is* reachable on about a third of seeds by a perfect omniscient planner. What is
+not reachable is 16 **on average**, and no real scheduler gets that information for free.
+
+### The bound that actually governs us
+
+The number to steer by is not 14.97 — it assumes perfect observation. `./bench <seed> 16
+bound` answers the useful question: **given the discovery timeline this scheduler really
+produces, what completion count was ever available**, with free optimal routing and no
+charge for observation? (`BENCH_BOUND_NOFORE=1` also forbids setting off toward a task
+before it is discovered.)
+
+| | 200 seeds |
 |---|---|
-| Mean completed | **14.12 / 16** |
-| P(= 16) | **16.0 %** |
-| P(≥ 15) | **44.6 %** |
-| P(≥ 14) | 70.8 % |
-| Tasks walled off from every worker | 0.11 |
-| Energy the optimum actually uses | 35.8k of 48k |
+| We discover | 12.96 |
+| We complete | 11.64 |
+| **Best available given our own discovery** | **12.07** |
+| Routing gap | **0.43** (92 of 200 seeds already optimal, 24 negative) |
 
-Convergence check: raising restarts from 300 to 5000 on 60 seeds gains **+0.08** mean, so
-the true optimum is ≈ 14.2 at most.
+**Routing is essentially finished.** Everything left is observation: we discover 13.0 of
+16, and each task we fail to see is a task nobody can serve.
 
-**Consequences, which are not negotiable by better code:**
-
-* **16 completed on average is impossible.** A perfect planner with free perfect
-  information averages 14.1. Every real scheduler must additionally *pay* for its
-  information out of the same 48k energy pool and can only act on what it has seen.
-* **"15 completed, stably" is impossible.** The perfect planner clears 15 only 44.6 % of
-  the time. No policy can be more reliable than the offline optimum on the same instance.
-* The binding constraints are the fleet's **energy** (12000 per robot = 1200 ticks of
-  action in a 2000-tick run) and the **clock** (the last task spawns at t=1375, leaving
-  625 ticks). Raising energy to 150 % lifts the same router from 12.14 to 14.74; raising it
-  to 400 % adds only 0.12 more, so past ~1.5× the run is time-bound, not energy-bound.
-
-### Full accounting of the 16 → 10.58 gap
+### Full accounting of the 16 → 11.69 gap
 
 | Loss | Tasks | Nature |
 |---|---|---|
-| Walled off from every worker | 0.11 | physically impossible |
-| Beyond fleet energy/time even with optimal routing and free perfect information | 1.77 | physically impossible |
-| **⇒ ceiling with perfect information** | **14.12** | |
-| Our router vs that ceiling (12.65 measured with perfect info, scouts off) | 1.47 | partly unavailable online: the bound still knows *where* future tasks will land when it orders routes |
-| Imperfect observation (10.58 real vs 12.65 with perfect info) | 2.07 | the real remaining engineering target |
+| Walled off from every worker | 0.11 | impossible |
+| Beyond fleet energy/time even for the exact omniscient optimum | 0.92 | impossible |
+| **⇒ exact ceiling with perfect information** | **14.97** | |
+| Tasks we never discover in time to serve | ~2.9 | **the remaining target** |
+| Routing, measured against our own discovery timeline | 0.43 | nearly closed |
 
-**Routing ceiling of the current build** (perfect information *and* observation switched
-off — `SCHED_T_SMR=2000000000 SCHED_T_PMR=2000000000 ./bench <seed> 16 oracle`, 200 seeds):
-**12.65 completed**, 10.0k of 48k worker energy still stranded.
+## 3b. Why the shape of the solution is what it is
 
-> **Oracle caveat, learned the hard way:** bench's `oracle` mode completes the *known maps*,
-> but the scheduler tracks `last_seen` from the real robot views, so under oracle the fleet
-> still pays for observation it does not need. A raw `oracle` run therefore *understates* a
-> build that observes more. Always disable the scouts (as above) when measuring routing.
+A robot carries 6 energy per tick of the run, so it can act for at most **1200 of the 2000
+ticks** no matter what it does. That single fact drives the whole design: acting early
+spends a fixed budget on the worst information the run will ever have. So the workers
+**hold until t=800 and then spend everything**, which is exactly their energy budget, with
+the map as complete as it is going to get. Before t=800 a worker serves only a task it is
+standing on or one nobody else could ever reach.
 
-### Where the remaining loss is
-
-1. **Observation (≈ 2.1 tasks).** Of the ~3.5 tasks never found, ~1.7 sit on cells never
-   observed at all (34.5 of 400 cells are still unknown at t=2000) and ~1.8 are timing
-   misses — the cell *was* seen, but before the task spawned there. The budget is ~1.5
-   sweeps of the map, so raising discovery past ~12.5 currently costs completions at about
-   **1 completion per 3 discoveries** (see the drone pacing curve in §6).
-2. **Routing (≤ 1.5 tasks, and less than that is actually available).** See §7.
+This is not a tuning artefact — it was reached by following a measured gradient
+(travel cap 3800 → 2400 → 900 → 0, endgame window 600 → 900 → 1200, each step a separate
+300-seed paired measurement confirmed against neighbours on both sides), and every attempt
+to make the workers do *anything* before t=800 loses: patrolling from t=400 costs 2.67
+completions, from t=200 costs 4.27, and even a 500-energy sip of early scouting costs 0.19.
 
 ## 4. Architecture of `schedular.cpp` (navigation map)
 
@@ -133,13 +142,13 @@ off — `SCHED_T_SMR=2000000000 SCHED_T_PMR=2000000000 ./bench <seed> 16 oracle`
    discount over them (`TASK_MAGNET`) and workers collect tasks *en route*.
 2. **per-robot Dijkstra** — two maps per worker: `dist` (magnet-routed, used for *paths*) and
    `dist_c` (clean, used for *costing*). Mixing them up silently corrupts economics.
-3. **fleet plan** — a real multi-vehicle route solve over the known free tasks: seed from last
-   tick's routes (stickiness), insertion to place as many tasks as fit within each worker's
-   energy and the horizon, then relocate / swap / 2-opt to shorten routes, which frees the
-   energy that lets one more task fit. Each worker walks the **first leg of its own route**.
-   Two gates survive from the old greedy matcher because they still measure positive: the
-   waiting clock (`STARVE_AGE` + `WORKER_TRAVEL_CAP`) on the first leg only, and immediate
-   promotion for `sole_server` tasks and the endgame (`ENDGAME_TICKS_DEF`).
+3. **fleet plan** — solved **exactly** whenever at most `EXACT_MAX` (16) free tasks are known,
+   which is always: per worker a DP over (subset, last visited) carrying the Pareto frontier of
+   (energy, completion time), then an exact partition across workers maximising the count and
+   breaking ties on energy. Local search (insertion + relocate/swap/2-opt, seeded from last
+   tick's routes) remains as the fallback. Each worker walks the **first leg of its own route**.
+   The first leg is gated by `WORKER_TRAVEL_CAP` (0) until the endgame opens at
+   `ENDGAME_TICKS_DEF` (1200 ticks before the end, i.e. t=800) — see §3b for why.
 4. **`serve_dist`** — cheapest travel energy any still-capable worker could pay to reach each cell.
 5. **`build_staleness`** — the observation value model, and the heart of the current design:
    `value(cell) = mass(cell) × serve(cell)` where
@@ -171,8 +180,10 @@ bench harness can sweep them without a rebuild. **Unset environment = the measur
 * Task magnet on worker paths — free pickups en route.
 * Marginal-cost scoring — pushes medium hauls onto energy-rich robots.
 * Waiting clock + sole-server protection — stops both over-eager far trips and starvation.
-* Solving the routes as an actual VRP rather than scoring tasks one at a time
-  (+0.30 completed, and +0.5 on the isolated router).
+* Solving the routes as an actual VRP rather than scoring tasks one at a time, and then
+  solving that VRP **exactly** rather than by local search (+0.32 on the holdout).
+* Holding the workers until they can spend their whole budget (§3b). The single largest
+  change in this work: +0.81 completed on the holdout.
 * **Observation valued as expected *completions*, not staleness** (§4.5). The single biggest change
   this session.
 * **Scouts choosing targets by value per unit energy.** The old argmax-value rule would walk 4000
@@ -222,6 +233,23 @@ This session (all paired, 300 seeds, vs the then-current build):
 | Stronger tour-first preference (0.05) / stickier assignment (0.6) | ±0.00 / −0.03 |
 | Residual observation value in the dead zone, at pace 2000 | −0.27 completed for +0.14 discovered |
 | Shorter serve-time ramp (`SERVE_RAMP` 80) | ±0.00 |
+
+Second round (all paired, 300 seeds unless noted):
+
+| Attempt | Measured effect |
+|---|---|
+| Holding worker energy back for tasks that have not spawned yet | −0.06 at 2000, −0.23 at 4000. The right mechanism is the travel cap, not a reserve. |
+| Weighting routes by where they leave a worker, valued against a uniformly random future spawn | −0.18 at 400, −0.31 at 1000 |
+| Keeping a nearly-reached target first (commitment lock) | −0.016 ± 0.010 over 500 seeds |
+| Bending worker task routes through cells worth observing | +0.02 at pull 40; **−0.18 completed for +0.16 discovered** at 150 |
+| Extra mass on never-seen cells (×2.5) | −0.11 completed |
+| Any worker movement before t=800 | −2.67 at patrol-start 400, −4.27 at 200, −0.19 for even a 500-energy sip |
+| Patrol start 700 or 1000 instead of 800 | −0.45 / −0.18 |
+| Endgame window 1050, 1350, 1500, 1800 | −0.09 / −0.23 / −0.19 / −0.43 — 1200 is a genuine peak |
+| More local-search rounds (12 → 40) | exactly ±0.00; irrelevant now that the plan is exact |
+| `EXACT_MAX` above 14 | exactly ±0.00 — the free-task count never exceeds 14 |
+| Re-sweeping the observation weights after the strategy change (`SERVE_W_HI` 4.0, `SERVE_W_LO` 0.4, `SERVE_RAMP` 450) | −0.10 / ±0.00 / −0.02 |
+| Drone pacing 1200 / 2000 after the strategy change | −0.59 discovered / −0.22 completed |
 | More local-search rounds in the fleet plan (12 → 40) | **exactly ±0.00** — the plan is converged at 12 |
 | Dropping `WORKER_TRAVEL_CAP` now that a real plan exists | −0.16 completed on the isolated router; the waiting clock still earns its keep |
 | Assigning straight from the tour / stronger tour bonus / stickier assignment | ±0.00 each |
@@ -248,24 +276,23 @@ both, so the frontier ends around 2000.
 
 ## 7. Suggested attack order for the next session
 
-**First, read §3a.** Any goal above ~14 completed is asking for something the fleet physically
-cannot do, and above ~12 is asking to beat the offline optimum's own margin. Set targets against
-that table, not against 16.
+**Read §3a and §3b first.** The exact ceiling is 14.97 with free perfect information; the bound
+that governs us, given the discovery we actually achieve, is **12.07**, and we are at 11.69.
+Set targets against those, and expect the next whole task to be hard.
 
-1. **Observation is now the larger addressable gap (≈ 2.1 tasks).** Two concrete sub-targets:
-   * 34.5 of 400 cells are never observed at all. Closing them costs ~7 drone steps (~1.7k
-     energy) and there is 4.0k worker + 1.3k drone energy still stranded at t=2000. The value
-     model skips them deliberately because they score as expensive to serve — the question is
-     whether that judgement is miscalibrated for cells that are merely *currently* far.
-   * ~1.8 tasks are timing misses: the cell was seen, but before the task spawned. That needs
-     re-observation, which needs capacity, which means cheaper travel.
-2. **Routing has ≤ 1.5 left and much of it is not available online.** The 14.12 bound still
-   knows where future tasks will land when it orders routes; our 12.65 does not. Before
-   investing, build the fair bound: a rolling-horizon version of `bench/plan.cpp` that re-solves
-   at each release with only released tasks and commits first legs. If that lands near 12.7,
-   routing is finished and everything left is observation.
-3. **Do not spend more effort on scalar knobs.** Every knob in §6 has been swept twice; the last
-   twenty experiments moved completions by ≤ 0.06 each.
+1. **Observation is now the only meaningful lever** — the routing gap is 0.43 and 92 of 200
+   seeds are already optimal. We discover 13.0 of 16. Of the ~3 we miss, ~1.1 sit on cells
+   nobody ever observed (22.8 open-ground cells per run are never seen) and the rest are timing
+   misses, where the cell was seen but before the task spawned there.
+2. **The observation budget is the constraint, and it is now almost entirely the drones'** —
+   the workers cannot spare a single unit before t=800 without losing more than it buys (§6).
+   Two drones carry 24k, about 1.5 sweeps of the map. Any real gain has to come from covering
+   more cells per unit of drone energy, not from re-weighting which cells they prefer: the
+   weights have been swept twice and are at a local optimum.
+   The one structural idea not yet tried is an explicit boustrophedon lane sweep timed to the
+   spawn schedule, instead of the value-per-energy greedy. Earlier sessions rejected *fixed
+   lattice* sweeps, but never a lane sweep driven by the current value model.
+3. **Do not re-sweep scalar knobs.** Everything in §6 has now been swept three times.
 
 ## 8. Bench harness
 
@@ -278,15 +305,18 @@ cd bench
                                      #   (never_seen vs timing), robot economics, known map dump
 ./bench 45 16 oracle                 # perfect information (see the caveat in section 3)
 ./exp.sh <label> <start> <count> [cap] [mode]   # labelled batch + aggregate, honours SCHED_T_*
-./plan <seed> [restarts] [notime|nofore]        # OFFLINE OPTIMUM for that seed -- the ceiling
-                                                #   nofore = no clairvoyant pre-positioning
+./plan <seed> [restarts] [notime|nofore]        # heuristic offline plan -- a LOWER bound only
+./exact <seed> [nofore]                         # EXACT optimum by subset DP -- the real ceiling
+./bench <seed> 16 bound                         # best available GIVEN our own discovery times
+                                                #   (BENCH_BOUND_NOFORE=1 forbids pre-positioning)
 python3 cmp.py <labelA> <labelB>     # PAIRED per-seed diff with standard errors — use this
 python3 aggregate.py results.csv 12  # P(metric >= threshold) with Wilson lower bound
 BENCH_ENERGY_PCT=200 ./bench 45 16   # diagnostic: is energy the binding constraint?
 ```
 
 Seeds already spent: tuning 1–400 and 500001–500300; holdouts 10001+, 20001+, 30001+, 40001+,
-60001+, 70001+, 900001–900500, 910001–910500, 920001–920500.
+60001+, 70001+, 900001–900500, 910001–910500, 920001–920500, 930001–930500,
+940001–940500.
 **Pick a fresh range for final validation.**
 
 ## 9. History of the branch
@@ -299,7 +329,10 @@ Seeds already spent: tuning 1–400 and 500001–500300; holdouts 10001+, 20001+
 | `1744710` | observation valued as expected completions | 10.20 | 12.12 | 500001–500300 |
 | `76d898d` | tuning + removal of the unreachable sparse path | 10.27 | 12.25 | 900001–900500 |
 | `6455000` | worker routes solved as a real VRP | 10.58 | 12.47 | 910001–910500 |
-| **`65165f4`** | **observation reach + endgame retune** | **10.58** | **12.49** | **920001–920500** |
+| `65165f4` | observation reach + endgame retune | 10.58 | 12.49 | 920001–920500 |
+| `58ad564` | exact fleet plan added (but shipped switched off) | — | — | |
+| `1bfbea9` | hold the workers, then go all in | 11.44 | 12.93 | 930001–930500 |
+| **HEAD** | **exact plan actually enabled** | **11.69** | **12.99** | **940001–940500** |
 
 The `ac88b21` row is this session's re-measurement of that build's profile, not the number the
 session that produced it reported (9.73 / 10.90 on its own seed set) — different seeds, so compare
