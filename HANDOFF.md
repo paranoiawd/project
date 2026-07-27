@@ -105,8 +105,25 @@ before it is discovered.)
 | **Best available given our own discovery** | **12.07** |
 | Routing gap | **0.43** (92 of 200 seeds already optimal, 24 negative) |
 
-**Routing is essentially finished.** Everything left is observation: we discover 13.0 of
-16, and each task we fail to see is a task nobody can serve.
+**Routing is essentially finished.** Everything left is observation — but see the next
+section before assuming that means "discover more".
+
+### Discovering more does not help. This is measured, not argued.
+
+Run the same `bound` tool against the *discovery-maximal* build (the pre-session rim-ring
+scheduler, which discovers 14.12):
+
+| 200 seeds | current build | discovery-maximal build |
+|---|---|---|
+| Discovered | 12.96 | **14.12** |
+| Completed | 11.64 | 8.72 |
+| **Max possible given that discovery timeline** | **12.07** | **10.65** |
+
+The discovery-maximal build finds 1.2 more tasks and its *ceiling* is 1.4 lower than what
+we already achieve. Its extra finds land after t≈1700, when no worker can still reach them.
+So the completion metric is not limited by how many tasks are discovered but by **when**,
+and at this energy budget the two are in direct conflict. A goal expressed as "discover
+more" is a goal to make completions worse.
 
 ### Full accounting of the 16 → 11.69 gap
 
@@ -250,6 +267,7 @@ Second round (all paired, 300 seeds unless noted):
 | `EXACT_MAX` above 14 | exactly ±0.00 — the free-task count never exceeds 14 |
 | Re-sweeping the observation weights after the strategy change (`SERVE_W_HI` 4.0, `SERVE_W_LO` 0.4, `SERVE_RAMP` 450) | −0.10 / ±0.00 / −0.02 |
 | Drone pacing 1200 / 2000 after the strategy change | −0.59 discovered / −0.22 completed |
+| Giving up a whole worker as a full-time scout | **−1.6 completed at one, −3.9 at two — and discovery *falls* too** (12.45 vs 13.02). Trading service capacity for observation loses at every scale tested. |
 | More local-search rounds in the fleet plan (12 → 40) | **exactly ±0.00** — the plan is converged at 12 |
 | Dropping `WORKER_TRAVEL_CAP` now that a real plan exists | −0.16 completed on the isolated router; the waiting clock still earns its keep |
 | Assigning straight from the tour / stronger tour bonus / stickier assignment | ±0.00 each |
