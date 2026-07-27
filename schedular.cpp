@@ -71,7 +71,7 @@ namespace
     // rebuild; every default below is the value the reported numbers were
     // measured on, and an unset environment reproduces them exactly.
     double SERVE_W_HI = 3.0;    // weight at zero serve cost
-    double SERVE_W_LO = 0.55;   // weight for unreachable cells
+    double SERVE_W_LO = 0.8;    // weight for unreachable cells
     double SERVE_W_SLOPE = 5000.0; // energy per unit of weight lost
     int SERVE_RAMP = 260;       // ticks of slack over which value ramps to zero
     int SCOUT_K = 500;          // energy offset in the value/cost ratio (~one step)
@@ -86,7 +86,7 @@ namespace
     int PATROL_LATE_ENERGY = 400;// so the patrol floor drops to here
     int DRONE_PACE_T = 1700;    // ticks over which a drone's fuel is spread (0 = no pacing)
     int DRONE_BURST = 3000;     // fuel a drone may spend ahead of that line
-    double SERVE_W_DEAD = 0.08; // residual weight once nothing found here could
+    double SERVE_W_DEAD = 0.25; // residual weight once nothing found here could
                                 // still be served: raw discovery is still worth
                                 // something to a robot whose fuel is otherwise lost
 
@@ -105,7 +105,7 @@ namespace
     int TASK_MAGNET = 350;                      // path bonus for stepping onto a free task
     const int LOCK_DIST = 700;                        // don't rebook a nearly-reached assignment
     const int HORIZON_HARD_PER_CELL = 100;            // assumed hard end ~ 100 * map_size ticks
-    int ENDGAME_TICKS_DEF = 600;                // endgame window before the hard horizon
+    int ENDGAME_TICKS_DEF = 900;                // endgame window before the hard horizon
     double TOUR_FIRST_BONUS = 0.55;             // score factor for a tour's first leg
     const int TOUR_MAX_LEN = 8;                       // max tasks per planned tour
     const int PLAN_INF = 1000000000;

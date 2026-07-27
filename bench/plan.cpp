@@ -359,6 +359,18 @@ int main(int argc, char **argv)
         eval_seq(in, w, best[w], &e);
         etot += e;
     }
-    cout << seed << "," << best_n << "," << greedy_n << "," << etot << "," << in.nt << endl;
+    // how many tasks no worker can physically reach (walled-off pockets)?
+    int unreachable = 0;
+    for (int j = 0; j < in.nt; ++j)
+    {
+        bool any = false;
+        for (int w = 0; w < in.nw && !any; ++w)
+            if (in.dstart[w][j] < INF)
+                any = true;
+        if (!any)
+            ++unreachable;
+    }
+    cout << seed << "," << best_n << "," << greedy_n << "," << etot << "," << in.nt
+         << "," << unreachable << endl;
     return 0;
 }
