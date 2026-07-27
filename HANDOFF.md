@@ -107,6 +107,23 @@ before it is discovered.)
 **Routing is essentially finished.** Everything left is observation — but see the next
 section before assuming that means "discover more".
 
+### The observation policy is at its own maximum, measured directly
+
+`B` — the best completion count available given a policy's discovery timeline — is the only
+thing worth maximising, since completions are pinned to it. Measured directly along the
+drone pacing axis (150 seeds each), it peaks exactly where the scheduler already sits:
+
+| `DRONE_PACE_T` | discovered | B |
+|---|---|---|
+| 1400 | 13.01 | 12.15 |
+| **1700 (current)** | 13.19 | **12.28** |
+| 2000 | 13.35 | 12.19 |
+| 2300 | 13.49 | 12.08 |
+
+Discovery keeps rising to the right and B falls, which is the same finding as the table
+below in a continuous form. **If you want to beat 12.2, the thing to maximise is B, not
+`discovered` and not `completed` — and B is already at a local maximum.**
+
 ### Discovering more does not help. This is measured, not argued.
 
 Run the same `bound` tool against the *discovery-maximal* build (the pre-session rim-ring
@@ -251,7 +268,7 @@ This session (all paired, 300 seeds, vs the then-current build):
 | Steeper serve-cost falloff (`SERVE_W_SLOPE` 3500) | −0.23 completed, −0.25 discovered |
 | Loosening `WORKER_TRAVEL_CAP` to 5200 | −0.16 completed |
 | `STARVE_AGE` 100 (promote waiting tasks sooner) | −0.36 completed, −0.21 discovered |
-| Stronger patrol dispersion (3000 vs 1200) | ±0.00 — 1200 already saturates it |
+| Stronger patrol dispersion (3000 vs 1200) | ±0.00 — 1200 already saturates it; retested after the strategy change, still ±0.00, and turning it off costs 0.05 |
 | Bigger up-front drone burst (6000) | −0.07 completed, −0.28 discovered |
 | Stronger tour-first preference (0.05) / stickier assignment (0.6) | ±0.00 / −0.03 |
 | Residual observation value in the dead zone, at pace 2000 | −0.27 completed for +0.14 discovered |
@@ -261,7 +278,7 @@ Second round (all paired, 300 seeds unless noted):
 
 | Attempt | Measured effect |
 |---|---|
-| Holding worker energy back for tasks that have not spawned yet | −0.06 at 2000, −0.23 at 4000. The right mechanism is the travel cap, not a reserve. |
+| Holding worker energy back for tasks that have not spawned yet | −0.06 at 2000, −0.23 at 4000. **Retested after the hold-then-commit change**, where the argument for it is much stronger: it looked like +0.04 at 1000 on the tuning set (1.5 SE) and did not replicate on the holdout (−0.01 ± 0.02). Not shipped. The right mechanism is the commit crossover, not a reserve. |
 | Weighting routes by where they leave a worker, valued against a uniformly random future spawn | −0.18 at 400, −0.31 at 1000 |
 | Keeping a nearly-reached target first (commitment lock) | −0.016 ± 0.010 over 500 seeds |
 | Bending worker task routes through cells worth observing | +0.02 at pull 40; **−0.18 completed for +0.16 discovered** at 150 |
