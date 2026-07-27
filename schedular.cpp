@@ -64,8 +64,9 @@ namespace
     double ASSIGN_STICKY = 0.85;                // cost discount for keeping an assignment
     const int WORKER_MIN_ENERGY = 30;                 // below this a worker is effectively retired
     int WORKER_TRAVEL_CAP = 0;               // normal per-assignment travel budget
-    const int DRONE_CAMERA_FLOOR = 400;               // drones never spend below this (parked sensor)
-    const int DRONE_STEP_EST = 300;                   // rough energy for one drone step
+    int DRONE_CAMERA_FLOOR = 100;                     // drones never spend below this (parked sensor)
+    int DRONE_STEP_EST = 120;                         // rough energy for one drone step
+    int DRONE_TAIL_FLOOR = 10;                        // reserve once no spawns remain
     // Observation-value and patrol knobs.  These are readable from the
     // environment (SCHED_T_*) so the bench harness can sweep them without a
     // rebuild; every default below is the value the reported numbers were
@@ -139,6 +140,9 @@ namespace
         PATROL_MIN_ENERGY = envi("SCHED_T_PME", PATROL_MIN_ENERGY);
         PATROL_MIN_RATIO = envi("SCHED_T_PMR", PATROL_MIN_RATIO);
         PLAN_SLACK = envi("SCHED_T_SLACK", PLAN_SLACK);
+        DRONE_CAMERA_FLOOR = envi("SCHED_T_DFLOOR", DRONE_CAMERA_FLOOR);
+        DRONE_STEP_EST = envi("SCHED_T_DSTEP", DRONE_STEP_EST);
+        DRONE_TAIL_FLOOR = envi("SCHED_T_DTAIL", DRONE_TAIL_FLOOR);
         PATROL_DISPERSE = envi("SCHED_T_PDISP", PATROL_DISPERSE);
         PLAN_ITERS = envi("SCHED_T_PITER", PLAN_ITERS);
         PLAN_RESERVE = envi("SCHED_T_PRES", PLAN_RESERVE);
@@ -1146,8 +1150,15 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                                static_cast<int>((e0 - DRONE_BURST - DRONE_CAMERA_FLOOR) * frac);
             floor_energy = max(DRONE_CAMERA_FLOOR, budget_floor);
         }
-        if (r.get_energy() - DRONE_STEP_EST < floor_energy)
-            continue; // parked as camera until the late sweep begins
+        // A parked drone is a 5x5 camera, which is only worth anything while
+        // there are still spawns left to catch.  Once the dispatcher is done
+        // (spawned_frac == 1000) the camera can only re-see cells it is already
+        // seeing, so the reserve keeping it alive is pure waste -- spend it.
+        int keep = floor_energy;
+        if (st.spawned_frac(st.now) >= 1000)
+            keep = min(keep, DRONE_TAIL_FLOOR);
+        if (r.get_energy() - DRONE_STEP_EST < keep)
+            continue; // parked as camera
 
         map<int, Coord>::iterator gi = st.drone_goal.find(r.id);
         bool need_new = true;
