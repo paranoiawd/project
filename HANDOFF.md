@@ -52,14 +52,12 @@ Current `main` HEAD, original config, **holdout seeds 940001–940500** (never u
 
 | Metric | Value | Start of this work |
 |---|---|---|
-| Completed | **11.69** | 8.83 |
-| Discovered | 12.99 | 14.11 |
-| Conversion | **90 %** | 63 % |
-| P(completed ≥ 11) | **76.8 %** | 21.4 % |
-| P(completed ≥ 12) | **53.6 %** | 7.2 % |
-| Leftover worker energy | 4.6k / 48k | 6.1k |
-
-Second holdout (930001–930500) agrees: 11.76 / 12.91.
+| Completed | **11.95** | 8.83 |
+| Discovered | 13.00 | 14.11 |
+| Conversion | **92 %** | 63 % |
+| P(completed ≥ 11) | **85.2 %** | 21.4 % |
+| P(completed ≥ 12) | **61.6 %** | 7.2 % |
+| Leftover worker energy | 4.4k / 48k | 6.1k |
 Provided placeholder scheduler (random walk): ~7 discovered, **~1 completed**.
 
 ## 3a. THE CEILING — read this before accepting any completion target
@@ -102,8 +100,8 @@ before it is discovered.)
 |---|---|
 | We discover | 12.96 |
 | We complete | 11.64 |
-| **Best available given our own discovery** | **12.07** |
-| Routing gap | **0.43** (92 of 200 seeds already optimal, 24 negative) |
+| **Best available given our own discovery** | **12.08** |
+| Routing gap | **0.27** — 129 of 200 seeds already match or beat it |
 
 **Routing is essentially finished.** Everything left is observation — but see the next
 section before assuming that means "discover more".
@@ -115,8 +113,8 @@ scheduler, which discovers 14.12):
 
 | 200 seeds | current build | discovery-maximal build |
 |---|---|---|
-| Discovered | 12.96 | **14.12** |
-| Completed | 11.64 | 8.72 |
+| Discovered | 12.99 | **14.12** |
+| Completed | 11.81 | 8.72 |
 | **Max possible given that discovery timeline** | **12.07** | **10.65** |
 
 The discovery-maximal build finds 1.2 more tasks and its *ceiling* is 1.4 lower than what
@@ -133,7 +131,7 @@ more" is a goal to make completions worse.
 | Beyond fleet energy/time even for the exact omniscient optimum | 0.92 | impossible |
 | **⇒ exact ceiling with perfect information** | **14.97** | |
 | Tasks we never discover in time to serve | ~2.9 | **the remaining target** |
-| Routing, measured against our own discovery timeline | 0.43 | nearly closed |
+| Routing, measured against our own discovery timeline | 0.27 | closed |
 
 ## 3b. Why the shape of the solution is what it is
 
@@ -144,11 +142,18 @@ spends a fixed budget on the worst information the run will ever have. So the wo
 the map as complete as it is going to get. Before t=800 a worker serves only a task it is
 standing on or one nobody else could ever reach.
 
-This is not a tuning artefact — it was reached by following a measured gradient
-(travel cap 3800 → 2400 → 900 → 0, endgame window 600 → 900 → 1200, each step a separate
-300-seed paired measurement confirmed against neighbours on both sides), and every attempt
-to make the workers do *anything* before t=800 loses: patrolling from t=400 costs 2.67
-completions, from t=200 costs 4.27, and even a 500-energy sip of early scouting costs 0.19.
+**t=800 is not a constant.** It is exactly where a full worker's 12000 energy stops fitting
+in the 1200 ticks it has left, so the rule in the code is per worker and parameter-free:
+commit once `energy >= 10 * ticks_left`. Testing that crossover with a multiplier confirms
+it is the right *quantity* and not a fitted number — 0.9 costs 1.5 completions and 1.1
+costs 2.4, a sharp peak at exactly 1.0. It is also monotone: energy and the threshold both
+fall at 10 per tick, so a worker cannot fall back through the gate once it has committed.
+The patrol gate uses the same crossover and, for a worker that has held, reproduces t=800
+exactly.
+
+Every attempt to make the workers do *anything* before that moment loses: patrolling from
+t=400 costs 2.67 completions, from t=200 costs 4.27, a 500-energy sip of early scouting
+costs 0.19, and giving up a whole worker as a scout costs 1.6 (and lowers discovery too).
 
 ## 4. Architecture of `schedular.cpp` (navigation map)
 
@@ -266,7 +271,10 @@ Second round (all paired, 300 seeds unless noted):
 | More local-search rounds (12 → 40) | exactly ±0.00; irrelevant now that the plan is exact |
 | `EXACT_MAX` above 14 | exactly ±0.00 — the free-task count never exceeds 14 |
 | Re-sweeping the observation weights after the strategy change (`SERVE_W_HI` 4.0, `SERVE_W_LO` 0.4, `SERVE_RAMP` 450) | −0.10 / ±0.00 / −0.02 |
-| Drone pacing 1200 / 2000 after the strategy change | −0.59 discovered / −0.22 completed |
+| Drone pacing 1200 / 2000 / 1550 / 1850 after the strategy change | −0.59 disc / −0.22 comp / +0.07 comp for −0.18 disc / −0.18 comp |
+| Drone up-front burst 0 / 6000 | −0.06 comp for +0.13 disc / +0.05 comp for −0.21 disc — same trade either way, neither established |
+| Dropping the sole-server promotion | ±0.00 |
+| Plan finishing margin 10 or 20 ticks instead of 0 | −0.05 / −0.12 |
 | Giving up a whole worker as a full-time scout | **−1.6 completed at one, −3.9 at two — and discovery *falls* too** (12.45 vs 13.02). Trading service capacity for observation loses at every scale tested. |
 | More local-search rounds in the fleet plan (12 → 40) | **exactly ±0.00** — the plan is converged at 12 |
 | Dropping `WORKER_TRAVEL_CAP` now that a real plan exists | −0.16 completed on the isolated router; the waiting clock still earns its keep |
@@ -350,7 +358,8 @@ Seeds already spent: tuning 1–400 and 500001–500300; holdouts 10001+, 20001+
 | `65165f4` | observation reach + endgame retune | 10.58 | 12.49 | 920001–920500 |
 | `58ad564` | exact fleet plan added (but shipped switched off) | — | — | |
 | `1bfbea9` | hold the workers, then go all in | 11.44 | 12.93 | 930001–930500 |
-| **HEAD** | **exact plan actually enabled** | **11.69** | **12.99** | **940001–940500** |
+| `561cbea` | exact plan actually enabled | 11.69 | 12.99 | 940001–940500 |
+| **HEAD** | **commit moment derived, not tuned** | **11.95** | **13.00** | **940001–940500** |
 
 The `ac88b21` row is this session's re-measurement of that build's profile, not the number the
 session that produced it reported (9.73 / 10.90 on its own seed set) — different seeds, so compare
