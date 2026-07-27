@@ -5,11 +5,7 @@ int main()
 {
     constexpr int MAP_SIZE = 20;
     constexpr int NUM_ROBOT = 6;
-    // NOTE: raised from the original 16 — the target "18+ completed tasks at
-    // 90% probability" is impossible with a cap below 18.  See REPORT.md for
-    // the measured P(>=18) curve over this constant; the scheduler itself is
-    // configuration-agnostic and still works with the original value.
-    constexpr int NUM_MAX_TASKS = 52;
+    constexpr int NUM_MAX_TASKS = 16;
     constexpr int NUM_INITIAL_TASKS = NUM_MAX_TASKS / 2;
     constexpr int WALL_DENSITY = 20;
     constexpr int TIME_MAX = MAP_SIZE * 100;
