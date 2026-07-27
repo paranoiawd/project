@@ -1,3 +1,4 @@
 bench/bench
+bench/plan
 bench/*.csv
 *.o
