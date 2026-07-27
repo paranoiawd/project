@@ -79,12 +79,17 @@ namespace
     int PATROL_MIN_ENERGY = 1400;// a worker below this keeps its energy for tasks
     int PATROL_MIN_RATIO = 900; // workers see fewer cells per step than drones
     int PATROL_START = 800;     // first tick idle workers may patrol
+    int SPEND_GATE = 1;         // 1: a worker commits when its own energy could no
+                                // longer all be spent in the ticks that remain
+    int SPEND_MARGIN = 1000;    // x1000 on that crossover
+    int PATROL_GATE = 1;        // 1: patrol on the same crossover instead of a fixed tick
+    int NO_SOLE = 0;            // 1: drop the sole-server early promotion
     int SCOUT_WORKERS = 0;      // measured -1.6 completed at 1 and -3.9 at 2, and it
                                 // LOWERS discovery too; kept only as a dead end.
                                 // this many workers are given up as full-time scouts:
                                 // excluded from the fleet plan, patrolling from t=0
     int PATROL_DISPERSE = 1200; // x1000 weight pushing patrols away from other workers
-    const int PLAN_SLACK = 20;  // ticks of margin a route must finish inside
+    int PLAN_SLACK = 0;   // ticks of margin a route must finish inside
     int PLAN_ITERS = 12;        // local-search rounds per tick
     int PLAN_RESERVE = 0;       // worker energy withheld from routes for tasks not
                                 // yet spawned; decays with the arrival ramp
@@ -145,6 +150,11 @@ namespace
         PATROL_MIN_RATIO = envi("SCHED_T_PMR", PATROL_MIN_RATIO);
         PATROL_START = envi("SCHED_T_PSTART", PATROL_START);
         SCOUT_WORKERS = envi("SCHED_T_SCOUTW", SCOUT_WORKERS);
+        SPEND_GATE = envi("SCHED_T_SPEND", SPEND_GATE);
+        SPEND_MARGIN = envi("SCHED_T_SPENDM", SPEND_MARGIN);
+        PATROL_GATE = envi("SCHED_T_PGATE", PATROL_GATE);
+        PLAN_SLACK = envi("SCHED_T_SLACK", PLAN_SLACK);
+        NO_SOLE = envi("SCHED_T_NOSOLE", NO_SOLE);
         PATROL_DISPERSE = envi("SCHED_T_PDISP", PATROL_DISPERSE);
         PLAN_ITERS = envi("SCHED_T_PITER", PLAN_ITERS);
         PLAN_RESERVE = envi("SCHED_T_PRES", PLAN_RESERVE);
@@ -1066,7 +1076,19 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         // free up, or for a spawn that merges into the same trip, before the
         // fleet commits energy to the march.  Removing it costs completions.
         bool waited_out = (st.now - st.first_seen[tasks[j]->id]) > STARVE_AGE;
-        if (travel > WORKER_TRAVEL_CAP && !waited_out && !endgame && !sole_server[j])
+        // When to stop hoarding and commit.  The fixed endgame window puts that
+        // moment at t=800 for everyone, which is exactly where a full worker's
+        // 12000 energy stops fitting in the 1200 ticks it has left.  That is the
+        // real rule, and it is per worker: hold while energy is the scarce
+        // resource and information is still improving; spend once the energy
+        // would otherwise go unused.  A worker that keeps spending optimally
+        // sits on the crossover, so this reproduces t=800 for an untouched
+        // worker and adapts for one that got drawn in early or delayed.
+        bool go = endgame;
+        if (SPEND_GATE)
+            go = (static_cast<long long>(r.get_energy()) * 1000 >=
+                  static_cast<long long>(10) * ticks_left * SPEND_MARGIN);
+        if (travel > WORKER_TRAVEL_CAP && !waited_out && !go && !(sole_server[j] && !NO_SOLE))
             continue;
         new_owner[tasks[j]->id] = r.id;
         st.assigned[r.id] = tasks[j]->id;
@@ -1212,7 +1234,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
 
 
 
-    if (st.now >= PATROL_START || !scout_ids.empty())
+    if (st.now >= PATROL_START || PATROL_GATE || !scout_ids.empty())
     {
         // Idle-worker patrol.  A worker with no task it wants to serve has
         // nothing better to do with its energy than look for one — leftover
@@ -1229,7 +1251,13 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
             // nothing once no such task could still be served: past
             // PATROL_LATE_T the reserve is released to observation.
             bool is_scout = scout_ids.count(r.id) > 0;
-            if (!is_scout && st.now < PATROL_START)
+            // Same crossover as the service gate: energy is only free to spend
+            // on looking once it could not all be spent on serving anyway.
+            bool may_patrol = PATROL_GATE
+                                  ? (static_cast<long long>(r.get_energy()) >=
+                                     static_cast<long long>(10) * (horizon_t - st.now))
+                                  : (st.now >= PATROL_START);
+            if (!is_scout && !may_patrol)
                 continue;
             int floor_e = (st.now >= PATROL_LATE_T) ? PATROL_LATE_ENERGY : PATROL_MIN_ENERGY;
             if (is_scout)
