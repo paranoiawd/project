@@ -227,6 +227,10 @@ This session (all paired, 300 seeds, vs the then-current build):
 | Assigning straight from the tour / stronger tour bonus / stickier assignment | ±0.00 each |
 | Fixing `window_gain` to count a wheel's cross (5 cells) instead of its square (9) | aggregate-neutral, but it is a correctness fix and re-tuning against the honest value bought +0.09 discovered |
 | Drone pacing 1900 | −0.09 completed for +0.27 discovered |
+| Removing the locality penalty on observation value entirely (`SERVE_W_LO` 1.2) | −0.03 completed, no discovery gain |
+| Less locality bias in the scout ratio (`SCOUT_K` 250) | −0.07 completed, −0.07 discovered |
+| Smaller up-front drone burst (1500) | −0.07 completed for +0.12 discovered |
+| Lower drone move threshold (`SCOUT_MIN_RATIO` 400) | **exactly ±0.00** — the threshold never binds |
 
 **Drone pacing curve** (`SCHED_T_DPACE`, ticks over which drone fuel is spread) — the cleanest
 statement of the completed/discovered trade-off available:
