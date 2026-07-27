@@ -349,10 +349,17 @@ Set targets against those, and expect the next whole task to be hard.
    Two drones carry 24k, about 1.5 sweeps of the map. Any real gain has to come from covering
    more cells per unit of drone energy, not from re-weighting which cells they prefer: the
    weights have been swept twice and are at a local optimum.
-   The one structural idea not yet tried is an explicit boustrophedon lane sweep timed to the
-   spawn schedule, instead of the value-per-energy greedy. Earlier sessions rejected *fixed
-   lattice* sweeps, but never a lane sweep driven by the current value model.
-3. **Do not re-sweep scalar knobs.** Everything in §6 has now been swept three times.
+   **The boustrophedon lane sweep has now been tried too, and it loses** (−0.23 completed,
+   −0.30 discovered; −0.33 when paired with later pacing). Lanes 2r+1 apart tile the views
+   exactly and waste no step re-covering what the last one saw, which is why it looked
+   promising — but the value-per-energy greedy beats it anyway, because it adapts to what
+   the workers and the *other* drone have already covered and to where the spawn mass
+   actually is. Systematic coverage is not the missing piece.
+
+   There is no idea left on this list that has not been measured.
+3. **Do not re-sweep scalar knobs.** Everything in §6 has now been swept four times, and the
+   last ~25 experiments were all either exactly ±0.00 or failed to replicate on the holdout.
+   If you want to move this number, it will take an idea that is not on the list.
 
 ## 8. Bench harness
 
