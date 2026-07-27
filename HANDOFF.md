@@ -122,7 +122,11 @@ drone pacing axis (150 seeds each), it peaks exactly where the scheduler already
 
 Discovery keeps rising to the right and B falls, which is the same finding as the table
 below in a continuous form. **If you want to beat 12.2, the thing to maximise is B, not
-`discovered` and not `completed` — and B is already at a local maximum.**
+`discovered` and not `completed`.** B has now been measured along two axes and is at a
+local maximum on both. The one thing worth knowing: flattening the spatial weight
+(`SERVE_W_LO` 0.8 → 1.5) does raise B, 12.28 → 12.33 — but the extra B is in finds the
+router cannot reach, so completions do not follow (−0.01 over 300 seeds). Any future gain
+has to raise B *and* be reachable.
 
 ### Discovering more does not help. This is measured, not argued.
 
@@ -281,7 +285,7 @@ Second round (all paired, 300 seeds unless noted):
 | Holding worker energy back for tasks that have not spawned yet | −0.06 at 2000, −0.23 at 4000. **Retested after the hold-then-commit change**, where the argument for it is much stronger: it looked like +0.04 at 1000 on the tuning set (1.5 SE) and did not replicate on the holdout (−0.01 ± 0.02). Not shipped. The right mechanism is the commit crossover, not a reserve. |
 | Weighting routes by where they leave a worker, valued against a uniformly random future spawn | −0.18 at 400, −0.31 at 1000 |
 | Keeping a nearly-reached target first (commitment lock) | −0.016 ± 0.010 over 500 seeds |
-| Bending worker task routes through cells worth observing | +0.02 at pull 40; **−0.18 completed for +0.16 discovered** at 150 |
+| Bending worker task routes through cells worth observing | +0.02 at pull 40. **Retested after the hold-then-commit change**, where worker travel is concentrated and precious: −0.02 at 60, −0.29 at 150, −0.59 at 300. Worse than before, not better. Code removed. |
 | Extra mass on never-seen cells (×2.5) | −0.11 completed |
 | Any worker movement before t=800 | −2.67 at patrol-start 400, −4.27 at 200, −0.19 for even a 500-energy sip |
 | Patrol start 700 or 1000 instead of 800 | −0.45 / −0.18 |
