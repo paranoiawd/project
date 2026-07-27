@@ -63,7 +63,7 @@ namespace
     const int EST_CELL_COST[3] = {160, 299, 448};     // expected cell cost per type (drone/cat/wheel)
     double ASSIGN_STICKY = 0.85;                // cost discount for keeping an assignment
     const int WORKER_MIN_ENERGY = 30;                 // below this a worker is effectively retired
-    int WORKER_TRAVEL_CAP = 2400;               // normal per-assignment travel budget
+    int WORKER_TRAVEL_CAP = 0;               // normal per-assignment travel budget
     const int DRONE_CAMERA_FLOOR = 400;               // drones never spend below this (parked sensor)
     const int DRONE_STEP_EST = 300;                   // rough energy for one drone step
     // Observation-value and patrol knobs.  These are readable from the
@@ -110,12 +110,12 @@ namespace
         const char *v = getenv(k);
         return v ? atoi(v) : d;
     }
-    int STARVE_AGE = 600;                       // discovered-but-unserved ticks before the
+    int STARVE_AGE = 800;                       // discovered-but-unserved ticks before the
                                                       // travel cap is waived for a task
     int TASK_MAGNET = 350;                      // path bonus for stepping onto a free task
     const int LOCK_DIST = 700;                        // don't rebook a nearly-reached assignment
     const int HORIZON_HARD_PER_CELL = 100;            // assumed hard end ~ 100 * map_size ticks
-    int ENDGAME_TICKS_DEF = 900;                // endgame window before the hard horizon
+    int ENDGAME_TICKS_DEF = 1200;                // endgame window before the hard horizon
     double TOUR_FIRST_BONUS = 0.55;             // score factor for a tour's first leg
     const int TOUR_MAX_LEN = 8;                       // max tasks per planned tour
     const int PLAN_INF = 1000000000;
