@@ -68,7 +68,10 @@ int main(int argc, char **argv)
     const int NUM_INITIAL_TASKS = NUM_MAX_TASKS / 2;
     constexpr int WALL_DENSITY = 20;
     constexpr int TIME_MAX = MAP_SIZE * 100;
-    constexpr int ROBOT_ENERGY = TIME_MAX * 6;
+    // BENCH_ENERGY_PCT lets a diagnostic run ask "is energy the binding
+    // constraint?" without touching the scheduler.  100 = the real rules.
+    const int ROBOT_ENERGY = TIME_MAX * 6 *
+                             (getenv("BENCH_ENERGY_PCT") ? atoi(getenv("BENCH_ENERGY_PCT")) : 100) / 100;
     set<Coord> observed_coords;
     set<Coord> updated_coords;
 
