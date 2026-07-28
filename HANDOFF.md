@@ -396,6 +396,7 @@ holdouts — note how many screening wins did not survive that:
 | Partial serve weighting (`SERVE_W_HI` 1.5, 2.0, 2.5 with `LO`=`DEAD`=1.0) | all worse than fully flat once pacing is at 1900; 2.0 at pace 1700 was the best partial (+0.14/+0.21) but lost to flat+1900 on the holdout (+0.09/+0.04) |
 | **Abandoning a committed drone target when something is worth ≥1.5× more** (`SCOUT_RECOMMIT` 150) | +0.09/+0.13 on one holdout, **−0.08/+0.01 on the other**; pooled +0.007 completed, +0.071 ± 0.039 discovered. Mechanism is kept and knob-selectable, **shipped off** — it does not clear the bar. |
 | Flattening the serve weight *without* the path-integrated value | −0.07 completed for +0.28 discovered — a move *along* the frontier, not out. This is the control that shows the code change, not the knob, is doing the work. |
+| **Letting a drone leave its x-band when the other side pays a better *rate*** (not merely "when its own band is spent", which is the version §6 already killed) | −0.04 completed and −0.13 discovered at a 1.5× margin; at 3× the margin is never met, so it is an exact no-op. The bands are not a crude approximation to be relaxed — they are what stops the two scouts duplicating each other's coverage, and rate-based release re-derives the same answer. |
 
 **Drone pacing curve** (`SCHED_T_DPACE`, ticks over which drone fuel is spread) — the cleanest
 statement of the completed/discovered trade-off available. Measured under the *old* value
