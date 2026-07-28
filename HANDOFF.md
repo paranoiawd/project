@@ -48,20 +48,73 @@ Observation and completion are paid for out of the same pool.
 
 ## 3. Where performance stands today (measured)
 
-Current `main` HEAD, original config, **holdout seeds 940001–940500** (never used for anything):
+Current `main` HEAD, original config, **1000 fresh holdout seeds** (960001–960500 and
+970001–970500, neither used for any tuning), paired against the previous HEAD:
 
-| Metric | Value | Start of this work |
+| Metric | previous HEAD | **current HEAD** |
 |---|---|---|
-| Completed | **12.19** | 8.83 |
-| Discovered | 13.34 | 14.11 |
-| Conversion | **91 %** | 63 % |
-| P(completed ≥ 11) | **89.2 %** | 21.4 % |
-| P(completed ≥ 12) | **69.2 %** | 7.2 % |
-| Leftover worker energy | 2.4k / 48k | 6.1k |
-| Leftover drone energy | **0.2k / 24k** | 2.5k |
+| Completed | 12.04 | **12.22** (+0.181 ± 0.052) |
+| Discovered | 13.24 | **13.63** (+0.387 ± 0.053) |
+| P(completed ≥ 12) | 66.9 % | **68.5 %** |
+| P(discovered ≥ 14) | 46.6 % | **57.5 %** |
+| Open cells never observed | 20.1 | **14.4** |
+| Leftover worker energy | 2.4k / 48k | 2.5k / 48k |
+| Leftover drone energy | 0.3k / 24k | 0.4k / 24k |
+
+Miss breakdown, same build: coverage holes 0.99 → **0.72** per run, timing misses 1.89 →
+**1.57**, initial-8 found 7.49 → **7.64**, late-8 found 5.63 → **6.07**.
 Provided placeholder scheduler (random walk): ~7 discovered, **~1 completed**.
 
 ## 3a. THE CEILING — read this before accepting any completion target
+
+### `bench/exact.cpp` has now been independently verified — treat it as sound
+
+It was re-audited from scratch rather than trusted. `bench/verify_exact.cpp` checks it three
+ways, sharing no code with the DP it is checking, and **100/100 seeds pass**:
+
+| Check | What it does | Result |
+|---|---|---|
+| **A1 algorithm** | every servable subset up to size 6, brute-forced over *all permutations* and evaluated directly, vs the Pareto DP's answer | **2.75 M subsets, 0 mismatches** |
+| **A2 partition** | the layered subset-sum DP vs an independent recursive partition search | 0 mismatches |
+| **B model** | concrete routes replayed in the **real simulator**, driving a real `ROBOT` through `start_moving`/`move`/`start_working`/`work`, comparing predicted energy and completion tick against reality | 263 routes, **0 mismatches** |
+| falsification | 300 real runs vs the bound on the same seeds | 0 violations |
+
+The mechanics were also re-derived from `simulator.{h,cpp}` and every one matches: step cost
+`ceil((floor(cost(u)/2)+cost(v))/10)` ticks at 10 energy/tick (each step re-ceils — arrival
+overshoot is discarded), work `10*max(1,ceil(cost/10))`, HOLD free, and `t <= TIME_MAX`
+exactly right (the last usable tick is 1999, and `main.cpp` re-reads `status` by reference so
+no tick is lost between arriving and starting).
+
+One caveat found and worth knowing: `exact` runs the dispatcher with no robots moving, but
+`get_random_empty_coord` rejects robot-occupied cells, so the *positions* of tasks 8–15 in a
+real run diverge from `exact`'s instance. It does not affect the bound as a distributional
+statement, and it is why check B replays initial tasks only.
+
+### What the ceiling actually is (measured this session, current build)
+
+| Regime | completed | discovered |
+|---|---|---|
+| current build, real energy, real information | 12.22 | 13.63 |
+| best available **given our own discovery timeline** (no pre-positioning) | 12.21 | — |
+| current scheduler + **free perfect information** | **14.23** | 16.00 |
+| current scheduler + **unlimited fleet energy** (200 % and 300 % are identical) | **13.61** | 15.17 |
+| exact omniscient optimum, no pre-positioning (verified) | **14.95** | 16 |
+
+Read those rows together, because they decide what any completion target is worth:
+
+* **Routing is finished.** The honest bound given our own discovery is 12.21 and we complete
+  12.22. (A `bound` run *without* `BENCH_BOUND_NOFORE` reports a 0.98 gap — ignore it; that
+  number lets a worker set off toward a task before it is discovered.)
+* **The whole remaining gap is information**, and it is worth 2.0–2.3 completions.
+* **Energy stops binding before the target is reached.** At 200 % fleet energy the scheduler
+  gets 13.61/15.17 and at 300 % it gets *exactly the same numbers* — beyond that point the
+  limit is the clock, not fuel: a drone step takes 18–30 ticks, so no amount of energy buys
+  enough re-sweeps to catch the late spawns.
+
+So a goal of "+2.0 completed" (→ ~14.2) asks for more than **unlimited fuel** delivers (13.61)
+and essentially all of what **free perfect information** delivers (14.23). It is not reachable.
+"+2.0 discovered" (→ ~15.6) is above every configuration ever measured at real energy (the
+discovery-maximal builds top out near 13.9–14.1) and needs roughly 2× fleet energy (15.17).
 
 **A previous version of this file claimed the ceiling was 14.12 and that 16/16 was
 impossible. That was wrong and the reasoning was unsound**, so if you have read an older
@@ -200,12 +253,19 @@ costs 0.19, and giving up a whole worker as a scout costs 1.6 (and lowers discov
      (`spawned_frac`): a never-seen cell carries the initial batch plus everything since; a cell
      seen at tick τ carries only the spawns released after τ. Re-observation is therefore worth
      **exactly zero before the first spawn**, which is what makes the early game pure coverage.
-   * `serve` = how cheaply *and how soon* a find there could be completed — the cheapest worker's
-     travel energy, ramped to (almost) nothing when the ticks left no longer cover the trip.
-6. **drones** — one x-band each, target = argmax of **window value per unit of energy**, committed
-   until reached (re-picking every tick oscillates: approaching a target observes away its own
-   value). Spending follows a paced line (`DRONE_PACE_T`) so coverage spreads across the run;
-   below the line a drone parks and keeps observing as a fixed camera.
+   * `serve` = how cheaply *and how soon* a find there could be completed. **This factor is
+     now neutral** (`SERVE_W_HI` = `SERVE_W_LO` = `SERVE_W_DEAD` = 1.0) and that is measured,
+     not an oversight — see §5. The knobs are still live for re-sweeping.
+6. **drones** — one x-band each, target = argmax of **value per unit of energy over the whole
+   trip** (`path_gain`: a cumulative walk over the shortest-path tree crediting every cell the
+   route brings into view for the first time, not just the destination window). Committed until
+   reached — re-picking every tick oscillates, because approaching a target observes away its
+   own value. Spending follows a paced line (`DRONE_PACE_T`) so coverage spreads across the
+   run; below the line a drone parks and keeps observing as a fixed camera.
+6b. **path steering** — `dijkstra` takes an optional direction-indexed grid of observation
+   value (`build_edge_val`, built from row/column prefix sums so each lookup is O(1)). It never
+   changes *which* cells are cheapest to reach, only which of the equally cheap paths is taken,
+   so it is free. Worker service routes get it too.
 7. **workers idle** — same value-per-energy patrol, plus a dispersion bonus for standing where no
    other worker can cheaply reach. Gated by `PATROL_START` and an energy floor that is *released*
    past `PATROL_LATE_T`, because energy still in the tank at t=2000 is a pure loss.
@@ -236,7 +296,19 @@ bench harness can sweep them without a rebuild. **Unset environment = the measur
   early-coverage profile finishes with 21.9k of 48k worker energy unspent and completes 9.16;
   with them on, 9.70 (and 10.50 after the rest of this session's work).
 * Drone commitment (never re-evaluate a goal you are still walking to).
-* Steep serve-cost weighting (3.0 → 0.3): observation concentrated where the fleet can reach.
+* ~~Steep serve-cost weighting~~ — **superseded, see below.**
+* **Scoring a scout trip by everything it sees on the way, not by the window it ends on**
+  (`SCOUT_PATHVAL`). The old rule costed the whole trip but only credited the destination,
+  which is the wrong economics for a fuel-limited scout: two targets with identical end
+  windows can differ by a whole sweep's worth of coverage. Computed as a cumulative walk over
+  the shortest-path tree, so it is O(cells) per scout per tick.
+* **Steering equal-cost paths by observation** (`PATH_TIEBREAK`). Shortest paths in this grid
+  are rarely unique and the tie was settled by queue order. Picking the better-observing one
+  among *exactly equally cheap* paths costs zero energy by construction.
+* **Turning the serve weighting off, but only after the two above.** Flattening it was worth
+  −0.07 completed on the old value model and **+0.23 completed / +0.39 discovered** on the new
+  one. It was double-pricing distance: the energy denominator already charges for a long trip,
+  and weighting it again suppressed exactly the sweeps that pay.
 
 ## 6. What was tried and measured to FAIL (do not redo)
 
@@ -313,53 +385,55 @@ Second round (all paired, 300 seeds unless noted):
 | Smaller up-front drone burst (1500) | −0.07 completed for +0.12 discovered |
 | Lower drone move threshold (`SCOUT_MIN_RATIO` 400) | **exactly ±0.00** — the threshold never binds |
 
+This session (path-integrated observation value). Screened on seeds 1–300, decided on 500-seed
+holdouts — note how many screening wins did not survive that:
+
+| Attempt | Measured effect |
+|---|---|
+| `SCOUT_K` 1500 (bigger locality offset, re-tuned for the new value scale) | +0.07 discovered on the tuning seeds, **−0.17 completed and −0.16 discovered on the holdout**. Did not replicate; kept at 500. A reminder that a 1-SE screening win is nothing. |
+| `SCOUT_K` 0 (pure rate, no offset) | −0.06 completed, ±0.00 discovered |
+| Drone pacing 1800 / 2000 / 2100 under the new model | +0.05 comp for −0.13 disc / −0.08 comp / −0.16 comp for +0.40 disc — 1900 is the joint peak |
+| Partial serve weighting (`SERVE_W_HI` 1.5, 2.0, 2.5 with `LO`=`DEAD`=1.0) | all worse than fully flat once pacing is at 1900; 2.0 at pace 1700 was the best partial (+0.14/+0.21) but lost to flat+1900 on the holdout (+0.09/+0.04) |
+| **Abandoning a committed drone target when something is worth ≥1.5× more** (`SCOUT_RECOMMIT` 150) | +0.09/+0.13 on one holdout, **−0.08/+0.01 on the other**; pooled +0.007 completed, +0.071 ± 0.039 discovered. Mechanism is kept and knob-selectable, **shipped off** — it does not clear the bar. |
+| Flattening the serve weight *without* the path-integrated value | −0.07 completed for +0.28 discovered — a move *along* the frontier, not out. This is the control that shows the code change, not the knob, is doing the work. |
+
 **Drone pacing curve** (`SCHED_T_DPACE`, ticks over which drone fuel is spread) — the cleanest
-statement of the completed/discovered trade-off available:
+statement of the completed/discovered trade-off available. Measured under the *old* value
+model; the joint peak has since moved from 1700 to **1900** (§6):
 
 | `DPACE` | Δ completed | Δ discovered |
 |---|---|---|
 | 0 (fly until empty) | +0.12 | −0.65 |
 | 1200 | +0.13 | −0.57 |
-| **1700 (current)** | — | — |
+| 1700 | — | — |
 | 2000 | −0.18 | +0.35 |
 | 2400 | −0.53 | −0.30 |
 
-If a future goal weights *discovered* more heavily, `DPACE` is the dial — but note 2400 loses on
-both, so the frontier ends around 2000.
-
 ## 7. Suggested attack order for the next session
 
-**Read §3a and §3b first.** The exact ceiling is 14.97 with free perfect information; the bound
-that governs us, given the discovery we actually achieve, is **12.07**, and we are at 11.69.
-Set targets against those, and expect the next whole task to be hard.
+**Read §3a first — it has been rewritten and the old numbers in it were stale.** The verified
+omniscient optimum is 14.95; the honest bound given the discovery we actually achieve is 12.21
+and we are at 12.22. Set targets against those.
 
-0. **The pattern that keeps paying is "find a reserve guarding a future that no longer
-   exists, and spend it".** The drone camera floor guarded against missing a spawn — worth
-   nothing once the dispatcher is done, and collapsing it was worth +0.22 completed *and*
-   +0.23 discovered at once, which almost nothing else here does. The worker commit moment
-   is the same idea in reverse (hold while the energy is scarce, spend when it could not
-   all be used anyway). If you find another such reserve, it is probably the best-value
-   thing on this list.
-1. **Observation is otherwise the only meaningful lever** — the routing gap is 0.43 and 92 of 200
-   seeds are already optimal. We discover 13.0 of 16. Of the ~3 we miss, ~1.1 sit on cells
-   nobody ever observed (22.8 open-ground cells per run are never seen) and the rest are timing
-   misses, where the cell was seen but before the task spawned there.
-2. **The observation budget is the constraint, and it is now almost entirely the drones'** —
-   the workers cannot spare a single unit before t=800 without losing more than it buys (§6).
-   Two drones carry 24k, about 1.5 sweeps of the map. Any real gain has to come from covering
-   more cells per unit of drone energy, not from re-weighting which cells they prefer: the
-   weights have been swept twice and are at a local optimum.
-   **The boustrophedon lane sweep has now been tried too, and it loses** (−0.23 completed,
-   −0.30 discovered; −0.33 when paired with later pacing). Lanes 2r+1 apart tile the views
-   exactly and waste no step re-covering what the last one saw, which is why it looked
-   promising — but the value-per-energy greedy beats it anyway, because it adapts to what
-   the workers and the *other* drone have already covered and to where the spawn mass
-   actually is. Systematic coverage is not the missing piece.
-
-   There is no idea left on this list that has not been measured.
-3. **Do not re-sweep scalar knobs.** Everything in §6 has now been swept four times, and the
-   last ~25 experiments were all either exactly ±0.00 or failed to replicate on the holdout.
-   If you want to move this number, it will take an idea that is not on the list.
+0. **Routing is closed. Do not spend a session on it.** Two independent measurements say so:
+   the no-pre-positioning bound given our own discovery timeline is 12.21 against our 12.22,
+   and handing the *current* scheduler free perfect information yields 14.23 against an exact
+   optimum of 14.95. Whatever is wrong, it is not the router.
+1. **Everything left is information, and it is worth 2.0 completions.** Perfect information is
+   +2.28 completed and +2.89 discovered on the same seeds. Nothing else on this list is worth
+   a tenth of that.
+2. **But observation cannot simply be bought.** At 200 % fleet energy the scheduler reaches
+   13.61/15.17 and at 300 % it reaches *exactly the same numbers*. Past that point the binding
+   constraint is the clock: a drone step costs 18–30 ticks, the map needs ~79 steps to sweep
+   once, and the two drones together can afford about 1.25 sweeps in 2000 ticks. There is no
+   second sweep to be had, at any price.
+3. **So the only thing that ever moves this is making each step count for more.** That is what
+   worked this session: the scout's value model was costing whole trips while crediting only
+   their last window (§5). The same question is worth asking again elsewhere — *where else is
+   something priced but not credited?*
+4. **Do not re-sweep scalar knobs, and do not trust a screening win.** Of this session's
+   experiments, `SCOUT_K`=1500 and `SCOUT_RECOMMIT`=150 both won on 300 tuning seeds and both
+   died on 500-seed holdouts. Screen at 300, decide at 500+, and pool both holdouts.
 
 ## 8. Bench harness
 
@@ -374,16 +448,23 @@ cd bench
 ./exp.sh <label> <start> <count> [cap] [mode]   # labelled batch + aggregate, honours SCHED_T_*
 ./plan <seed> [restarts] [notime|nofore]        # heuristic offline plan -- a LOWER bound only
 ./exact <seed> [nofore]                         # EXACT optimum by subset DP -- the real ceiling
+./verify_exact <seed> [max_subset=6]            # VERIFIES ./exact: brute-force permutations,
+                                                #   independent partition solver, and a replay
+                                                #   of real routes in the real simulator
 ./bench <seed> 16 bound                         # best available GIVEN our own discovery times
                                                 #   (BENCH_BOUND_NOFORE=1 forbids pre-positioning)
 python3 cmp.py <labelA> <labelB>     # PAIRED per-seed diff with standard errors — use this
 python3 aggregate.py results.csv 12  # P(metric >= threshold) with Wilson lower bound
+g++ -O2 -std=c++17 -w -I shim -o verify_exact verify_exact.cpp ../simulator.cpp
 BENCH_ENERGY_PCT=200 ./bench 45 16   # diagnostic: is energy the binding constraint?
 ```
 
+Results now land in `bench/out/` (git-ignored) and `cmp.py` reads from there, so the harness no
+longer depends on a session-specific scratch path. Override with `BENCH_OUT=<dir>`.
+
 Seeds already spent: tuning 1–400 and 500001–500300; holdouts 10001+, 20001+, 30001+, 40001+,
 60001+, 70001+, 900001–900500, 910001–910500, 920001–920500, 930001–930500,
-940001–940500.
+940001–940500, 950001–950300, 960001–960500, 970001–970500.
 **Pick a fresh range for final validation.**
 
 ## 9. History of the branch
@@ -401,7 +482,9 @@ Seeds already spent: tuning 1–400 and 500001–500300; holdouts 10001+, 20001+
 | `1bfbea9` | hold the workers, then go all in | 11.44 | 12.93 | 930001–930500 |
 | `561cbea` | exact plan actually enabled | 11.69 | 12.99 | 940001–940500 |
 | `5b52680` | commit moment derived, not tuned | 11.95 | 13.00 | 940001–940500 |
-| **HEAD** | **spend reserves that guard a future that is over** | **12.18** | **13.32** | **940001–940500** |
+| `14643ed` | spend reserves that guard a future that is over | 12.18 | 13.32 | 940001–940500 |
+| | *(same build re-measured on the seeds below)* | 12.04 | 13.24 | 960001+970001, n=1000 |
+| **HEAD** | **pay a scout for what it sees on the way** | **12.22** | **13.63** | **960001+970001, n=1000** |
 
 The `ac88b21` row is this session's re-measurement of that build's profile, not the number the
 session that produced it reported (9.73 / 10.90 on its own seed set) — different seeds, so compare

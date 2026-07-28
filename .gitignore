@@ -3,3 +3,6 @@ bench/plan
 bench/exact
 bench/*.csv
 *.o
+bench/out/
+bench/verify_exact
+bench/dbound

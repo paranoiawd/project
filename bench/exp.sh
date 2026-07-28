@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Run a labelled experiment over a seed range and print the aggregate.
 # Usage: ./exp.sh <label> <start_seed> <count> [cap=16] [mode]
+# Results land in $BENCH_OUT (default bench/out), which is git-ignored.
 set -euo pipefail
 cd "$(dirname "$0")"
 LABEL=$1; START=$2; N=$3; CAP=${4:-16}; MODE=${5:-}
-OUT=/tmp/claude-0/-home-user-project/2e830714-6818-57cf-a7ba-09143820e325/scratchpad/${LABEL}.csv
+OUTDIR=${BENCH_OUT:-$(pwd)/out}
+mkdir -p "$OUTDIR"
+OUT=$OUTDIR/${LABEL}.csv
 if [ -n "$MODE" ]; then
   seq "$START" $((START + N - 1)) | xargs -P "$(nproc)" -I{} ./bench {} "$CAP" "$MODE" 2>/dev/null \
     | grep -E "^[0-9]+,${CAP}," > "$OUT"

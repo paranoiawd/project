@@ -7,7 +7,8 @@ Usage: cmp.py <base.csv> <variant.csv>
 """
 import sys, statistics as st
 
-SCRATCH = "/tmp/claude-0/-home-user-project/2e830714-6818-57cf-a7ba-09143820e325/scratchpad/"
+import os
+SCRATCH = os.environ.get("BENCH_OUT", os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")) + "/"
 
 
 def load(p):
