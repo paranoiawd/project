@@ -71,12 +71,29 @@ namespace
     // environment (SCHED_T_*) so the bench harness can sweep them without a
     // rebuild; every default below is the value the reported numbers were
     // measured on, and an unset environment reproduces them exactly.
-    double SERVE_W_HI = 3.0;    // weight at zero serve cost
-    double SERVE_W_LO = 0.8;    // weight for unreachable cells
+    // Serve weighting: how much more an observation is worth where the fleet
+    // could actually act on a find.  It is NEUTRAL by default (all three
+    // weights 1.0) and that is a measured result, not an oversight.  It existed
+    // to stop a scout walking half the map to refresh one far window -- but
+    // that was an artefact of scoring a target by the window it ends on.  Once
+    // a trip is scored by everything it sees on the way (SCOUT_PATHVAL), the
+    // energy denominator already prices distance, and weighting it a second
+    // time suppressed exactly the sweeps that pay.  Flattening it on top of the
+    // OLD value model costs 0.07 completed; on top of the new one it is worth
+    // +0.23 completed and +0.39 discovered (500 fresh seeds, paired).
+    // The knobs are kept so the trade-off can be re-swept.
+    double SERVE_W_HI = 1.0;    // weight at zero serve cost
+    double SERVE_W_LO = 1.0;    // weight for unreachable cells
     double SERVE_W_SLOPE = 5000.0; // energy per unit of weight lost
     int SERVE_RAMP = 260;       // ticks of slack over which value ramps to zero
     int SCOUT_K = 500;          // energy offset in the value/cost ratio (~one step)
     int SCOUT_MIN_RATIO = 900;  // minimum value per unit cost for a drone to move
+    int SCOUT_PATHVAL = 1;      // score a scout target by everything its path sees,
+                                // not just the window it ends on (0 = old rule)
+    int PATH_TIEBREAK = 1;      // among equally cheap paths, take the one that
+                                // observes the most (costs no energy at all)
+    int SCOUT_RECOMMIT = 0;     // % margin at which a drone abandons a committed
+                                // target (0 = hold it until reached)
     int PATROL_MIN_ENERGY = 1400;// a worker below this keeps its energy for tasks
     int PATROL_MIN_RATIO = 300; // workers see fewer cells per step than drones
     int PATROL_DISPERSE = 1200; // x1000 weight pushing patrols away from other workers
@@ -86,11 +103,16 @@ namespace
                                 // free tasks are known (0 = always use local search)
     int PATROL_LATE_T = 1200;   // after this tick there is nothing left to save for
     int PATROL_LATE_ENERGY = 50; // so the patrol floor drops to here
-    int DRONE_PACE_T = 1700;    // ticks over which a drone's fuel is spread (0 = no pacing)
+    int DRONE_PACE_T = 1900;    // ticks over which a drone's fuel is spread (0 = no pacing).
+                                // 1700 was the joint optimum for the old value
+                                // model; a sweep that is scored honestly pays to
+                                // run later (1800 gives back 0.13 discovered,
+                                // 2000 costs 0.08 completed).
     int DRONE_BURST = 3000;     // fuel a drone may spend ahead of that line
     double SERVE_W_DEAD = 1.0;  // residual weight once nothing found here could
                                 // still be served: raw discovery is still worth
                                 // something to a robot whose fuel is otherwise lost
+                                // (== SERVE_W_HI, so the ramp is neutral too)
 
     inline double envd(const char *k, double d)
     {
@@ -129,6 +151,9 @@ namespace
         SERVE_RAMP = envi("SCHED_T_SRAMP", SERVE_RAMP);
         SCOUT_K = envi("SCHED_T_SK", SCOUT_K);
         SCOUT_MIN_RATIO = envi("SCHED_T_SMR", SCOUT_MIN_RATIO);
+        SCOUT_PATHVAL = envi("SCHED_T_SPV", SCOUT_PATHVAL);
+        PATH_TIEBREAK = envi("SCHED_T_PTB", PATH_TIEBREAK);
+        SCOUT_RECOMMIT = envi("SCHED_T_SRC", SCOUT_RECOMMIT);
         PATROL_MIN_ENERGY = envi("SCHED_T_PME", PATROL_MIN_ENERGY);
         PATROL_MIN_RATIO = envi("SCHED_T_PMR", PATROL_MIN_RATIO);
         PLAN_SLACK = envi("SCHED_T_SLACK", PLAN_SLACK);
@@ -229,11 +254,20 @@ struct Scheduler::State
         return c;
     }
 
+    // `tb`, when given, is a direction-indexed grid of observation value (see
+    // build_edge_val).  It never changes which cells are cheapest to reach --
+    // it only decides *which* of the equally cheap paths is taken, so steering
+    // by it costs exactly zero energy.  Shortest paths in this grid are rarely
+    // unique, and the tie is otherwise settled by whichever order the queue
+    // happened to pop, which is worth nothing at all.
     void dijkstra(const Coord &src, int type, vector<int> &d, vector<int> &p,
-                  bool use_magnet = true) const
+                  bool use_magnet = true, const vector<int> *tb = 0) const
     {
         d.assign(n * n, PLAN_INF);
         p.assign(n * n, -1);
+        vector<int> pv;
+        if (tb)
+            pv.assign(n * n, 0); // observation value collected along the path
         typedef pair<int, int> QE; // (dist, node)
         priority_queue<QE, vector<QE>, greater<QE>> pq;
         int s = idx(src);
@@ -267,7 +301,21 @@ struct Scheduler::State
                 {
                     d[v] = nd;
                     p[v] = top.second;
+                    if (tb)
+                        pv[v] = pv[top.second] + (*tb)[k * n * n + v];
                     pq.push(QE(nd, v));
+                }
+                else if (tb && nd == d[v])
+                {
+                    // same energy, so this is free: keep the better-observing one.
+                    // v cannot have been popped yet (nd > d[u] >= every popped
+                    // key), so nothing downstream has been settled from it.
+                    int cand = pv[top.second] + (*tb)[k * n * n + v];
+                    if (cand > pv[v])
+                    {
+                        pv[v] = cand;
+                        p[v] = top.second;
+                    }
                 }
             }
         }
@@ -388,6 +436,158 @@ struct Scheduler::State
         return g;
     }
 
+    // Is (px,py) inside the view of a robot standing at (cx,cy)?
+    bool in_view(int cx, int cy, int px, int py, int r, bool cross) const
+    {
+        int ax = px - cx, ay = py - cy;
+        if (ax < 0)
+            ax = -ax;
+        if (ay < 0)
+            ay = -ay;
+        if (cross)
+            return (ay == 0 && ax <= r) || (ax == 0 && ay <= r);
+        return ax <= r && ay <= r;
+    }
+
+    // Value of the cells that come into view for the first time when stepping
+    // from u to v.  For a 5x5 view moving one cell this is the leading column
+    // of five -- the other twenty were already visible from u and re-seeing
+    // them buys nothing.
+    int step_gain(int ux, int uy, int vx, int vy, int r, bool cross) const
+    {
+        int g = 0;
+        for (int xx = max(vx - r, 0); xx <= min(vx + r, n - 1); ++xx)
+            for (int yy = max(vy - r, 0); yy <= min(vy + r, n - 1); ++yy)
+            {
+                if (cross && !in_view(vx, vy, xx, yy, r, true))
+                    continue;
+                if (in_view(ux, uy, xx, yy, r, cross))
+                    continue;
+                g += stale[idx(xx, yy)];
+            }
+        return g;
+    }
+
+    // pg[v] = the observation value a walk from src to v collects *on the way*,
+    // accumulated over the shortest-path tree.
+    //
+    // Scoring a scout target by the window it ends on is the wrong economics: a
+    // scout is paid for everything it sees while travelling, so two targets
+    // with identical destination windows can differ by a whole sweep's worth of
+    // coverage.  Costing the trip but not crediting it is what leaves cells
+    // unobserved with the fuel already spent.
+    void path_gain(const vector<int> &d, const vector<int> &p, int r, bool cross,
+                   vector<int> &pg) const
+    {
+        pg.assign(n * n, 0);
+        vector<pair<int, int>> ord; // (dist, cell), so parents come first
+        ord.reserve(n * n);
+        for (int i = 0; i < n * n; ++i)
+            if (d[i] < PLAN_INF)
+                ord.push_back(make_pair(d[i], i));
+        sort(ord.begin(), ord.end());
+        for (size_t i = 0; i < ord.size(); ++i)
+        {
+            int v = ord[i].second, u = p[v];
+            if (u < 0)
+                continue; // the source itself: nothing collected yet
+            pg[v] = pg[u] + step_gain(u / n, u % n, v / n, v % n, r, cross);
+        }
+    }
+
+    // ---- free path steering -----------------------------------------------
+    // Expected number of *undiscovered* tasks on each cell: the mass term of
+    // the observation value without the serve weighting.  It is separated out
+    // because it can be built before the per-robot dijkstras, whereas the full
+    // value cannot (it needs serve_dist, which needs those dijkstras) -- and a
+    // path can only be steered by something that exists when it is planned.
+    vector<int> obs_mass;
+
+    void build_obs_mass()
+    {
+        obs_mass.assign(n * n, 0);
+        int ft = spawned_frac(now);
+        for (int x = 0; x < n; ++x)
+            for (int y = 0; y < n; ++y)
+            {
+                if ((*obj_map)[x][y] == OBJECT::WALL)
+                    continue;
+                int ls = last_seen[x][y];
+                int m = (ls < 0) ? (1000 + ft) : (ft - spawned_frac(ls));
+                if (m > 0)
+                    obs_mass[idx(x, y)] = m;
+            }
+    }
+
+    // edge_val[type][k*n*n + v] = mass a robot of that type brings into view by
+    // stepping into cell v heading in direction k.  Row/column prefix sums make
+    // each entry O(1), so the whole table costs one pass over the grid.
+    vector<int> edge_val[3];
+
+    void build_edge_val()
+    {
+        vector<int> pc((n + 1) * n, 0), pr((n + 1) * n, 0);
+        for (int x = 0; x < n; ++x)
+            for (int y = 0; y < n; ++y)
+                pc[x * (n + 1) + y + 1] = pc[x * (n + 1) + y] + obs_mass[idx(x, y)];
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < n; ++x)
+                pr[y * (n + 1) + x + 1] = pr[y * (n + 1) + x] + obs_mass[idx(x, y)];
+        for (int ty = 0; ty < 3; ++ty)
+        {
+            int r = ROBOT::view_range_list[ty];
+            bool cross = (ROBOT::view_type_list[ty] == ROBOT::VIEWTYPE::CROSS);
+            edge_val[ty].assign(4 * n * n, 0);
+            for (int k = 0; k < 4; ++k)
+                for (int x = 0; x < n; ++x)
+                    for (int y = 0; y < n; ++y)
+                    {
+                        int dx = DXS[k], dy = DYS[k], g;
+                        if (cross)
+                        {
+                            // the tip that appears ahead, plus the arm laid
+                            // across the direction of travel; the cell itself
+                            // was already in view before the step
+                            int px = x + dx * r, py = y + dy * r;
+                            int tip = in_map(px, py) ? obs_mass[idx(px, py)] : 0;
+                            int arm = dx != 0 ? colsum(pc, x, y - r, y + r)
+                                              : rowsum(pr, y, x - r, x + r);
+                            g = tip + arm - obs_mass[idx(x, y)];
+                        }
+                        else
+                        {
+                            g = dx != 0 ? colsum(pc, x + dx * r, y - r, y + r)
+                                        : rowsum(pr, y + dy * r, x - r, x + r);
+                        }
+                        edge_val[ty][k * n * n + idx(x, y)] = g < 0 ? 0 : g;
+                    }
+        }
+    }
+
+    int colsum(const vector<int> &pc, int x, int a, int b) const
+    {
+        if (x < 0 || x >= n)
+            return 0;
+        if (a < 0)
+            a = 0;
+        if (b > n - 1)
+            b = n - 1;
+        if (a > b)
+            return 0;
+        return pc[x * (n + 1) + b + 1] - pc[x * (n + 1) + a];
+    }
+    int rowsum(const vector<int> &pr, int y, int a, int b) const
+    {
+        if (y < 0 || y >= n)
+            return 0;
+        if (a < 0)
+            a = 0;
+        if (b > n - 1)
+            b = n - 1;
+        if (a > b)
+            return 0;
+        return pr[y * (n + 1) + b + 1] - pr[y * (n + 1) + a];
+    }
 };
 
 Scheduler::Scheduler() : s_(new State()) {}
@@ -461,6 +661,12 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     }
 
     // ---- per-robot dijkstra ----------------------------------------------
+    // Built first so the routed paths below can be tie-broken by it.
+    if (PATH_TIEBREAK)
+    {
+        st.build_obs_mass();
+        st.build_edge_val();
+    }
     vector<const ROBOT *> by_id(max_id + 1, static_cast<const ROBOT *>(0));
     for (size_t i = 0; i < robots.size(); ++i)
     {
@@ -472,7 +678,8 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         if (r.get_status() == ROBOT::STATUS::EXHAUSTED || r.get_energy() <= 0)
             continue;
         Coord pos = (r.get_status() == ROBOT::STATUS::MOVING) ? r.get_target_coord() : r.get_coord();
-        st.dijkstra(pos, static_cast<int>(r.type), st.dist[r.id], st.par[r.id]);
+        st.dijkstra(pos, static_cast<int>(r.type), st.dist[r.id], st.par[r.id], true,
+                    PATH_TIEBREAK ? &st.edge_val[static_cast<int>(r.type)] : 0);
         if (r.type != ROBOT::TYPE::DRONE)
             st.dijkstra(pos, static_cast<int>(r.type), st.dist_c[r.id], st.scratch_par, false);
         else
@@ -1096,39 +1303,61 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         if (r.get_energy() - DRONE_STEP_EST < keep)
             continue; // parked as camera
 
+        // Value per unit of energy, not raw value: walking half the map to
+        // refresh one window costs more than the find is worth.  The +K
+        // offset keeps an adjacent cell from winning on a rounding artefact.
+        int best_ratio = 0;
+        Coord chosen = pos;
+        vector<int> pgain;
+        if (SCOUT_PATHVAL)
+            st.path_gain(d, st.par[r.id], viewr, false, pgain);
+        for (int x = half.first; x <= half.second; ++x)
+            for (int y = 0; y < st.n; ++y)
+            {
+                int dd = d[st.idx(x, y)];
+                if (dd >= PLAN_INF || dd > r.get_energy() - DRONE_CAMERA_FLOOR)
+                    continue;
+                if (Coord(x, y) == pos)
+                    continue;
+                int g = SCOUT_PATHVAL ? pgain[st.idx(x, y)]
+                                      : st.window_gain(x, y, viewr, false);
+                if (g <= 0)
+                    continue;
+                int ratio = static_cast<int>(static_cast<long long>(g) * 1000 / (dd + SCOUT_K));
+                if (ratio > best_ratio)
+                {
+                    best_ratio = ratio;
+                    chosen = Coord(x, y);
+                }
+            }
+
         map<int, Coord>::iterator gi = st.drone_goal.find(r.id);
         bool need_new = true;
         if (gi != st.drone_goal.end())
         {
             Coord g = gi->second;
             if (!(g == pos) && d[st.idx(g)] < PLAN_INF)
+            {
                 need_new = false;
+                // A goal is normally held until reached -- re-picking every tick
+                // oscillates, because approaching a target observes away its own
+                // value.  But a commitment can also go stale for a reason that
+                // has nothing to do with this drone: another robot sweeps the
+                // target's window first.  Abandon it only when something else is
+                // now worth clearly more, which is the case the oscillation
+                // argument does not cover.
+                if (SCOUT_RECOMMIT > 0)
+                {
+                    int gg = SCOUT_PATHVAL ? pgain[st.idx(g)]
+                                           : st.window_gain(g.x, g.y, viewr, false);
+                    long long gr = static_cast<long long>(gg) * 1000 / (d[st.idx(g)] + SCOUT_K);
+                    if (static_cast<long long>(best_ratio) * 100 > gr * SCOUT_RECOMMIT)
+                        need_new = true;
+                }
+            }
         }
         if (need_new)
         {
-            // Value per unit of energy, not raw value: walking half the map to
-            // refresh one window costs more than the find is worth.  The +K
-            // offset keeps an adjacent cell from winning on a rounding artefact.
-            int best_ratio = 0;
-            Coord chosen = pos;
-            for (int x = half.first; x <= half.second; ++x)
-                for (int y = 0; y < st.n; ++y)
-                {
-                    int dd = d[st.idx(x, y)];
-                    if (dd >= PLAN_INF || dd > r.get_energy() - DRONE_CAMERA_FLOOR)
-                        continue;
-                    if (Coord(x, y) == pos)
-                        continue;
-                    int g = st.window_gain(x, y, viewr, false);
-                    if (g <= 0)
-                        continue;
-                    int ratio = static_cast<int>(static_cast<long long>(g) * 1000 / (dd + SCOUT_K));
-                    if (ratio > best_ratio)
-                    {
-                        best_ratio = ratio;
-                        chosen = Coord(x, y);
-                    }
-                }
             if (best_ratio < SCOUT_MIN_RATIO || chosen == pos)
             {
                 st.drone_goal.erase(r.id);
@@ -1172,13 +1401,17 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
             int range = max(0, r.get_energy() - floor_e);
             int best_ratio = 0;
             Coord best = pos;
+            vector<int> pgain;
+            if (SCOUT_PATHVAL)
+                st.path_gain(st.dist[r.id], st.par[r.id], viewr, cross, pgain);
             for (int x = 0; x < st.n; ++x)
                 for (int y = 0; y < st.n; ++y)
                 {
                     int dd = d[st.idx(x, y)];
                     if (dd >= PLAN_INF || dd > range || Coord(x, y) == pos)
                         continue;
-                    int g = st.window_gain(x, y, viewr, cross);
+                    int g = SCOUT_PATHVAL ? pgain[st.idx(x, y)]
+                                          : st.window_gain(x, y, viewr, cross);
                     if (g <= 0)
                         continue;
                     if (PATROL_DISPERSE > 0)
