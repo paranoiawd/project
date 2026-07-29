@@ -468,6 +468,11 @@ model; the joint peak has since moved from 1700 to **1900** (§6):
 
 ## 7. Suggested attack order for the next session
 
+**A literature survey with ranked method candidates now exists in [`EXPLORATION.md`](EXPLORATION.md)**
+(2026-07-29 session): what the DVR/IPP/anticipatory-dispatch fields use for exactly this problem
+shape, which of it §6 already killed, and a 5-step experiment order starting with a cheap upper-bound
+check on the scout tour before any implementation.
+
 **Read §3a first — it has been rewritten and the old numbers in it were stale.** The verified
 omniscient optimum is 14.95; the only *valid* bound given the discovery we actually achieve is
 12.93 and we are at 12.22. Set targets against those, and read §3a on why the tighter-looking
