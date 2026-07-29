@@ -6,3 +6,4 @@ bench/*.csv
 bench/out/
 bench/verify_exact
 bench/dbound
+bench/scoutbound
