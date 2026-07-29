@@ -143,6 +143,31 @@ statement, and it is why check B replays initial tasks only.
 | current scheduler + **unlimited fleet energy** (200 % and 300 % are identical) | **13.61** | 15.17 |
 | exact omniscient optimum, no pre-positioning (verified) | **14.95** | 16 |
 
+### Free perfect **terrain** buys 0.000 discovery — route quality is not the constraint
+
+`./bench <seed> 16 terrain` reveals the whole cost map and every wall at t=0 while leaving
+task discovery to be earned exactly as before. It separates the two things `oracle` conflates:
+knowing the *layout* and knowing where the *work* is. Paired, 300 seeds (1–300):
+
+| | completed | discovered |
+|---|---|---|
+| control | 12.07 | 13.47 |
+| **+ free perfect terrain** | **12.26** (+0.190 ± 0.080) | **13.47** (+0.000 ± 0.083) |
+
+**Discovery does not move at all.** Handing the scouts a perfect map is worth exactly nothing
+in finds, and the completions it does buy come from workers routing over known ground rather
+than from any change in what gets seen. The physical reason is the one §3a already gives from
+the other direction: two drones can afford ~1.25 sweeps in 2000 ticks, a step brings ~5 new
+cells into view wherever it is taken, and **re-ordering a sweep does not create additional
+cell-ticks of observation.** Information cannot be bought (§3a) *and it cannot be re-routed
+into existence either*.
+
+This is what closes the scout-tour line of attack — see §6 for the four experiments it kills,
+and note especially that an offline model can look very convincing and still be wrong about
+this: `bench/scoutbound` reproduces the *level* of discovery to within 0.1 and still
+over-predicts the value of map knowledge by a full task. **Calibrate a model on the
+intervention you intend to make, not on the baseline.**
+
 Read those rows together, because they decide what any completion target is worth:
 
 * **Routing is low-yield but not proven closed** — headroom is in [0, 0.98]; see the bound
@@ -454,6 +479,24 @@ holdouts — note how many screening wins did not survive that:
 | Flattening the serve weight *without* the path-integrated value | −0.07 completed for +0.28 discovered — a move *along* the frontier, not out. This is the control that shows the code change, not the knob, is doing the work. |
 | **Letting a drone leave its x-band when the other side pays a better *rate*** (not merely "when its own band is spent", which is the version §6 already killed) | −0.04 completed and −0.13 discovered at a 1.5× margin; at 3× the margin is never met, so it is an exact no-op. The bands are not a crude approximation to be relaxed — they are what stops the two scouts duplicating each other's coverage, and rate-based release re-derives the same answer. |
 
+Method-exploration session (literature survey in [`EXPLORATION.md`](EXPLORATION.md), then its
+top-ranked candidate implemented and measured). All paired, 300 seeds (1–300), control is the
+same binary with the knob off:
+
+| Attempt | Measured effect |
+|---|---|
+| **Time-aware scout value** — credit a trip at the mass its cells will have **on arrival** rather than at departure, since a crossing takes ~500 ticks and more spawns land while the scout is in the air | **−0.010 ± 0.059 completed, +0.013 ± 0.064 discovered.** Exactly nothing. The greedy's problem is not how it *values* a trip |
+| **Rollout on the scout's target choice** (`SCOUT_ROLLOUT`): score each shortlisted target by simulating the greedy policy from there to the end of the fuel — one step of policy improvement in Bertsekas' sense, the cheap stand-in for a tour solver | ~±0 and **does not scale with effort**, which is what settles it: 5 candidates/sep 4 gave +0.143 ± 0.087 discovered, but 8/sep 4 gave +0.020, 5/sep 6 gave +0.040 and 10/sep 6 gave +0.037, completions flat throughout. A real mechanism does not get *weaker* with more candidates |
+| Shortlisting the top targets without spatial separation | the shortlist fills with neighbours of one hot spot (the ratio varies smoothly), so the rollout compares five versions of the same plan. Separation is necessary but not sufficient |
+| **Deadline discount inside the rollout** — value a find at zero once no worker could still reach it, which only a rollout can price because only it knows *when* each observation happens | **−0.113 completed, −0.233 discovered.** Re-pricing distance on top of this value model has now lost every single time it has been tried |
+| `UNKNOWN_PEN` 1.00 and 1.30 for ground types (**never swept before** — it was a compile-time constant) | −0.030/−0.030 and +0.017/−0.047. Flat. `EST_CELL_COST` is already the exact generator mean, so the estimate is unbiased; what terrain knowledge is worth is the *variance*, which cannot be estimated, only observed |
+
+The offline tool that motivated all of this (`bench/scoutbound`, §8) says optimising the scout
+tour is worth **+0.418 ± 0.024 expected discoveries** at equal information and equal pacing,
+better on 100/100 seeds, against a greedy baseline deliberately strengthened to the best of ten
+variants. **That headroom does not exist in the simulator** — see the terrain diagnostic in §3a.
+Do not re-open this on the strength of the offline number.
+
 **Drone pacing curve** (`SCHED_T_DPACE`, ticks over which drone fuel is spread) — the cleanest
 statement of the completed/discovered trade-off available. Measured under the *old* value
 model; the joint peak has since moved from 1700 to **1900** (§6):
@@ -468,10 +511,17 @@ model; the joint peak has since moved from 1700 to **1900** (§6):
 
 ## 7. Suggested attack order for the next session
 
-**A literature survey with ranked method candidates now exists in [`EXPLORATION.md`](EXPLORATION.md)**
-(2026-07-29 session): what the DVR/IPP/anticipatory-dispatch fields use for exactly this problem
-shape, which of it §6 already killed, and a 5-step experiment order starting with a cheap upper-bound
-check on the scout tour before any implementation.
+**A literature survey with ranked method candidates exists in [`EXPLORATION.md`](EXPLORATION.md)**
+(2026-07-29): what the DVR/IPP/anticipatory-dispatch fields use for exactly this problem shape,
+and which of it §6 already killed. **Its two top-ranked candidates have since been implemented
+and are closed** — read §3a's terrain diagnostic and the §6 rows before reviving anything that
+tries to route the scouts better. What is left there is candidates C (scenario consensus for
+worker legs), D (concave mass) and E (joint parameter search), all lower-yield.
+
+The one thing worth carrying forward from the closed line: the scouts reveal *terrain* as a side
+effect and the value model gives them no credit for it. The ceiling on that channel is measured
+and small (+0.19 completed for perfect terrain, §3a), but it is the same
+"paid-for-but-not-credited" shape that produced the last two real wins.
 
 **Read §3a first — it has been rewritten and the old numbers in it were stale.** The verified
 omniscient optimum is 14.95; the only *valid* bound given the discovery we actually achieve is
@@ -518,6 +568,20 @@ cd bench
 ./verify_exact <seed> [max_subset=6]            # VERIFIES ./exact: brute-force permutations,
                                                 #   independent partition solver, and a replay
                                                 #   of real routes in the real simulator
+./bench <seed> 16 terrain                       # reveal the MAP but not the tasks: the
+                                                #   scheduler starts knowing every wall and
+                                                #   cell cost, discovery still has to be
+                                                #   earned.  Separates "knows the layout" from
+                                                #   "knows where the work is", which `oracle`
+                                                #   conflates.  See 3a: worth +0.19 completed
+                                                #   and +0.000 discovered.
+./scoutbound <seed> [sa_iters=60000]            # is the GREEDY scout target rule leaving
+                                                #   anything on the table?  Scores an
+                                                #   observation record by expected discoveries,
+                                                #   then re-plans the drones greedily and by
+                                                #   simulated annealing over tours, both with
+                                                #   the true map, workers held fixed.
+python3 scoutcmp.py out/<file>.csv              # aggregate scoutbound, paired differences
 ./bench <seed> 16 bound                         # best available GIVEN our own discovery times.
                                                 #   This default form is the VALID one (loose).
                                                 #   BENCH_BOUND_NOFORE=1 looks tighter but is

@@ -60,7 +60,13 @@ namespace
 {
     // ---- tuning knobs -----------------------------------------------------
     const double UNKNOWN_PEN[3] = {1.05, 1.15, 1.15}; // pathfinding pessimism on unknown cells
-    const int EST_CELL_COST[3] = {160, 299, 448};     // expected cell cost per type (drone/cat/wheel)
+    // Expected cell cost per type (drone/cat/wheel).  These are the exact means
+    // of the generator in simulator.h -- drone (rand()%40+60)*2, cat 2t+100,
+    // wheel 4t+50 with t = rand()%200 -- so the estimate is unbiased and only
+    // the pessimism above is a free choice.  Both were swept (see HANDOFF 6):
+    // flat.  What terrain knowledge is actually worth is the *variance*, not the
+    // mean, and that cannot be estimated -- only observed.
+    const int EST_CELL_COST[3] = {160, 299, 448};
     double ASSIGN_STICKY = 0.85;                // cost discount for keeping an assignment
     const int WORKER_MIN_ENERGY = 30;                 // below this a worker is effectively retired
     int WORKER_TRAVEL_CAP = 0;               // normal per-assignment travel budget
