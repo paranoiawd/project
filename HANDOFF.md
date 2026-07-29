@@ -9,6 +9,49 @@ importantly — what has already been tried and measured to *fail*, so none of i
 
 ---
 
+## 0. Start here (30 seconds of orientation)
+
+**State:** completed **12.22**, discovered **13.63** (1000 fresh holdout seeds). The provided
+placeholder scheduler completes ~1.
+
+**Read in this order.** §3a prices any target you are about to accept — read it before agreeing
+to a number. §6 is ~70 experiments already measured to fail. §4 is the code map.
+
+**The three facts that determine what is worth trying:**
+
+1. **Routing has at most ~1.0 of headroom and probably a few tenths — but it is NOT proven
+   closed**, and earlier versions of this file over-claimed that. See §3a: the only *valid*
+   bound given our own discovery timeline is 12.93 against our 11.95, and the tighter-looking
+   `NOFORE` variant (12.21) is not a bound at all. The independent check is the oracle: with
+   free perfect information the current scheduler completes 14.23 against a verified exact
+   optimum of 14.95, so execution under good information is within 0.72 of an unattainable
+   ideal. Treat routing as low-yield, not finished.
+2. **Everything left is information**, worth ~2.3 completions — far more than routing.
+3. **Information cannot be bought.** At 200 % *and* 300 % fleet energy the scheduler returns
+   *identical* numbers (13.61 / 15.17). Past that point the clock binds, not fuel — a drone step
+   costs 18–30 ticks, a full map sweep needs ~79 steps, and two drones can afford ~1.25 sweeps
+   in the whole run.
+
+**So the only thing that has ever moved this number is making each step of the existing fuel
+count for more.** That is what the last change did, and the pattern generalises: *look for
+something the scheduler pays for but does not credit itself for.* The scout was being charged
+for a whole trip and credited only with the window it ended on.
+
+**How to not waste the session:** screen on 300 seeds, decide on 500+ *fresh* seeds, pool two
+holdout ranges. Two of last session's screening winners (`SCOUT_K`=1500, `SCOUT_RECOMMIT`=150)
+were >1 SE wins on the tuning set and died on the holdout. And for every candidate run the
+knob-only control — a change that moves *along* the completed/discovered frontier is not
+progress, only one that moves *out* is.
+
+**What changed last session** (see §5, §6, and §9 for the numbers):
+* `bench/exact.cpp` was independently verified rather than trusted — it is sound (§3a).
+* Scout targets are now scored by everything the trip sees, not the destination window.
+* Equal-cost paths are steered by observation value (free by construction).
+* The serve weighting is off, which is only correct because of the two changes above.
+* The stale ceiling numbers in this file were re-measured; several were badly wrong.
+
+---
+
 ## 1. Ground rules (do not violate)
 
 * Only `schedular.h` and `schedular.cpp` count as the deliverable. The grader compiles them
@@ -95,16 +138,15 @@ statement, and it is why check B replays initial tasks only.
 | Regime | completed | discovered |
 |---|---|---|
 | current build, real energy, real information | 12.22 | 13.63 |
-| best available **given our own discovery timeline** (no pre-positioning) | 12.21 | — |
+| best available **given our own discovery timeline** (valid bound) | 12.93 | — |
 | current scheduler + **free perfect information** | **14.23** | 16.00 |
 | current scheduler + **unlimited fleet energy** (200 % and 300 % are identical) | **13.61** | 15.17 |
 | exact omniscient optimum, no pre-positioning (verified) | **14.95** | 16 |
 
 Read those rows together, because they decide what any completion target is worth:
 
-* **Routing is finished.** The honest bound given our own discovery is 12.21 and we complete
-  12.22. (A `bound` run *without* `BENCH_BOUND_NOFORE` reports a 0.98 gap — ignore it; that
-  number lets a worker set off toward a task before it is discovered.)
+* **Routing is low-yield but not proven closed** — headroom is in [0, 0.98]; see the bound
+  discussion below, which corrects an over-claim in earlier versions of this file.
 * **The whole remaining gap is information**, and it is worth 2.0–2.3 completions.
 * **Energy stops binding before the target is reached.** At 200 % fleet energy the scheduler
   gets 13.61/15.17 and at 300 % it gets *exactly the same numbers* — beyond that point the
@@ -142,71 +184,85 @@ arrive-then-start gap ignored), so its answer is a genuine **upper bound**.
 So 16/16 *is* reachable on about a third of seeds by a perfect omniscient planner. What is
 not reachable is 16 **on average**, and no real scheduler gets that information for free.
 
-### The bound that actually governs us
+### The bound that actually governs us — and how to read it correctly
 
-The number to steer by is not 14.97 — it assumes perfect observation. `./bench <seed> 16
-bound` answers the useful question: **given the discovery timeline this scheduler really
-produces, what completion count was ever available**, with free optimal routing and no
-charge for observation? (`BENCH_BOUND_NOFORE=1` also forbids setting off toward a task
-before it is discovered.)
+`./bench <seed> 16 bound` asks: **given the discovery timeline this scheduler really produces,
+what completion count was ever available**, with free optimal routing and no charge for
+observation? There are two variants and **neither is the number you want on its own**:
 
-| | 200 seeds |
-|---|---|
-| We discover | 12.96 |
-| We complete | 11.64 |
-| **Best available given our own discovery** | **12.22** |
-| Routing gap | **0.23** — 130 of 200 seeds already match or beat it |
-
-**Routing is essentially finished.** Everything left is observation — but see the next
-section before assuming that means "discover more".
-
-### The observation policy is at its own maximum, measured directly
-
-`B` — the best completion count available given a policy's discovery timeline — is the only
-thing worth maximising, since completions are pinned to it. Measured directly along the
-drone pacing axis (150 seeds each), it peaks exactly where the scheduler already sits:
-
-| `DRONE_PACE_T` | discovered | B |
+| 200 seeds, current build | free (default) | `BENCH_BOUND_NOFORE=1` |
 |---|---|---|
-| 1400 | 13.01 | 12.15 |
-| **1700 (current)** | 13.19 | **12.28** |
-| 2000 | 13.35 | 12.19 |
-| 2300 | 13.49 | 12.08 |
+| We complete | 11.95 | 11.95 |
+| Bound reports | **12.93** | 12.21 |
+| Real runs that **exceed** it | **0 / 200** | **39 / 200 (20 %)** |
+| Status | **valid upper bound**, but loose | **not a bound** |
 
-Discovery keeps rising to the right and B falls, which is the same finding as the table
-below in a continuous form. **If you want to beat 12.2, the thing to maximise is B, not
-`discovered` and not `completed`.** B has now been measured along two axes and is at a
-local maximum on both. The one thing worth knowing: flattening the spatial weight
-(`SERVE_W_LO` 0.8 → 1.5) does raise B, 12.28 → 12.33 — but the extra B is in finds the
-router cannot reach, so completions do not follow (−0.01 over 300 seeds). Any future gain
-has to raise B *and* be reachable.
+**`NOFORE` is not an upper bound, and this file previously said it was.** It forbids a worker
+from setting off toward a task before that task is discovered — but a real worker is often
+*already en route* through a region when a discovery lands there, and picks it up. That is
+legal, it happens, and it is why 20 % of real runs beat the "bound". A `NOFORE` gap of 0.265
+does **not** mean routing is 0.265 from optimal.
 
-### Discovering more does not help. This is measured, not argued.
+The default variant *is* a valid relaxation (nothing is forbidden that reality allows), but it
+is loose in the other direction: it lets a worker pre-position clairvoyantly toward a task it
+cannot know about, which is worth ~0.7.
 
-Run the same `bound` tool against the *discovery-maximal* build (the pre-session rim-ring
-scheduler, which discovers 14.12):
+**So the honest statement is: routing headroom lies in [0, 0.98], and the two variants bracket
+it.** If you want to attack routing, first build a bound that is tight from both sides —
+neither of these is.
 
-| 200 seeds | current build | discovery-maximal build |
+The independent evidence that routing is nonetheless low-yield: give the *current* scheduler
+free perfect information and it completes **14.23** against a verified exact optimum of 14.95.
+Whatever the remaining loss is, most of it is not the router.
+
+### Discovery cannot simply be bought — the clock binds before fuel does
+
+`BENCH_ENERGY_PCT` scales every robot's energy. The result is the most important single fact
+about this problem:
+
+| fleet energy | completed | discovered |
 |---|---|---|
-| Discovered | 13.12 | **14.12** |
-| Completed | 11.99 | 8.72 |
-| **Max possible given that discovery timeline** | **12.07** | **10.65** |
+| 100 % (the real rules) | 12.08 | 13.46 |
+| 150 % | 13.56 | 14.71 |
+| **200 %** | **13.61** | **15.17** |
+| **300 %** | **13.61** | **15.17** |
 
-The discovery-maximal build finds 1.2 more tasks and its *ceiling* is 1.4 lower than what
-we already achieve. Its extra finds land after t≈1700, when no worker can still reach them.
-So the completion metric is not limited by how many tasks are discovered but by **when**,
-and at this energy budget the two are in direct conflict. A goal expressed as "discover
-more" is a goal to make completions worse.
+200 % and 300 % are *identical numbers*, not merely close. Past that point energy is not the
+constraint at all — the clock is. A drone step costs 18–30 ticks, one full map sweep needs
+~79 steps, and two drones can afford about **1.25 sweeps** in 2000 ticks. There is no second
+sweep to be had at any price, which is why the late spawns go unfound.
 
-### Full accounting of the 16 → 11.69 gap
+Use this table to price any completion target before accepting it. Anything above 13.6 is
+asking for more than infinite fuel delivers.
+
+### "Discover more" is a trap — but only one kind of it
+
+The old rim-ring scheduler discovered 14.12 and completed 8.72; its extra finds landed after
+t≈1700 when no worker could still reach them. Measured with the `bound` tool, its *ceiling*
+was 1.4 lower than what the current build already achieves.
+
+So: **buying discovery by spending fuel later is a trap** — it moves along the frontier and
+costs completions. `DRONE_PACE_T` is that dial and it is still a straight trade (§6).
+
+But that is not the same as "discovery cannot rise". **Making each step of the existing fuel
+count for more raises both**, and that is exactly what this session's change did: +0.18
+completed *and* +0.39 discovered together, with the control run confirming the knob alone
+would have been −0.07 for +0.28. When you find a candidate change, check which of the two it
+is — a frontier move or a frontier expansion — by running the knob-only control.
+
+### Full accounting of the 16 → 12.22 gap
 
 | Loss | Tasks | Nature |
 |---|---|---|
 | Walled off from every worker | 0.11 | impossible |
 | Beyond fleet energy/time even for the exact omniscient optimum | 0.92 | impossible |
 | **⇒ exact ceiling with perfect information** | **14.97** | |
-| Tasks we never discover in time to serve | ~2.9 | **the remaining target** |
-| Routing, measured against our own discovery timeline | 0.23 | closed |
+| Tasks never discovered in time to serve | ~2.5 | **the remaining target** |
+| Routing, against the only valid bound given our discovery | ≤ 0.98 | low-yield, not closed |
+
+Of the tasks missed, measured over 100 seeds on the current build: **0.72 per run sit on cells
+nobody ever observed** (14.4 open cells per run are never seen) and **1.57 are timing misses**,
+where the cell was seen but only before the task spawned there. Timing is the bigger half.
 
 ## 3b. Why the shape of the solution is what it is
 
@@ -413,13 +469,17 @@ model; the joint peak has since moved from 1700 to **1900** (§6):
 ## 7. Suggested attack order for the next session
 
 **Read §3a first — it has been rewritten and the old numbers in it were stale.** The verified
-omniscient optimum is 14.95; the honest bound given the discovery we actually achieve is 12.21
-and we are at 12.22. Set targets against those.
+omniscient optimum is 14.95; the only *valid* bound given the discovery we actually achieve is
+12.93 and we are at 12.22. Set targets against those, and read §3a on why the tighter-looking
+`NOFORE` number is not a bound.
 
-0. **Routing is closed. Do not spend a session on it.** Two independent measurements say so:
-   the no-pre-positioning bound given our own discovery timeline is 12.21 against our 12.22,
-   and handing the *current* scheduler free perfect information yields 14.23 against an exact
-   optimum of 14.95. Whatever is wrong, it is not the router.
+0. **Routing is low-yield, but do not repeat this file's old claim that it is "closed".**
+   The rigorous headroom is [0, 0.98] (§3a) — the tight-looking 0.265 came from a `NOFORE`
+   bound that real runs beat on 20 % of seeds, so it was never a bound. What *is* solid: with
+   free perfect information the current scheduler completes 14.23 against an exact optimum of
+   14.95. If you want the routing tenths, the first job is a bound that is actually tight —
+   one that lets a worker be en route when a discovery lands, but not walk toward a task it
+   cannot know about.
 1. **Everything left is information, and it is worth 2.0 completions.** Perfect information is
    +2.28 completed and +2.89 discovered on the same seeds. Nothing else on this list is worth
    a tenth of that.
@@ -439,7 +499,8 @@ and we are at 12.22. Set targets against those.
 ## 8. Bench harness
 
 ```bash
-bench/build.sh                       # g++ -O2, conio.h shim for Linux
+bench/build.sh                       # g++ -O2, conio.h shim for Linux (bench only)
+bench/build.sh all                   # + exact, verify_exact, plan
 cd bench
 ./bench <seed> [cap] [-v|oracle]     # one run; CSV: seed,cap,created,discovered,completed,
                                      #   exhausted,end_time,workerE,droneE,droneCellCost
@@ -452,11 +513,13 @@ cd bench
 ./verify_exact <seed> [max_subset=6]            # VERIFIES ./exact: brute-force permutations,
                                                 #   independent partition solver, and a replay
                                                 #   of real routes in the real simulator
-./bench <seed> 16 bound                         # best available GIVEN our own discovery times
-                                                #   (BENCH_BOUND_NOFORE=1 forbids pre-positioning)
+./bench <seed> 16 bound                         # best available GIVEN our own discovery times.
+                                                #   This default form is the VALID one (loose).
+                                                #   BENCH_BOUND_NOFORE=1 looks tighter but is
+                                                #   NOT a bound -- real runs beat it 20% of the
+                                                #   time.  See 3a before quoting either.
 python3 cmp.py <labelA> <labelB>     # PAIRED per-seed diff with standard errors — use this
 python3 aggregate.py results.csv 12  # P(metric >= threshold) with Wilson lower bound
-g++ -O2 -std=c++17 -w -I shim -o verify_exact verify_exact.cpp ../simulator.cpp
 BENCH_ENERGY_PCT=200 ./bench 45 16   # diagnostic: is energy the binding constraint?
 ```
 
