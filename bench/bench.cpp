@@ -66,6 +66,13 @@ int main(int argc, char **argv)
     // that was ever available GIVEN the discovery times this run produced,
     // with free optimal routing and no charge for observation.
     const bool BOUND = (argc > 3) && string(argv[3]) == string("bound");
+    // "terrain": reveal the MAP but not the tasks.  The scheduler starts knowing
+    // every wall and every cell cost, while task discovery still has to be
+    // earned exactly as before.  This separates the two things `oracle` conflates
+    // -- knowing the layout, and knowing where the work is -- and it is the
+    // diagnostic that says whether a smarter scout *route* is reachable at all,
+    // since any route planner is only as good as the map it plans on.
+    const bool TERRAIN = (argc > 3) && string(argv[3]) == string("terrain");
     const bool NOFORE = getenv("BENCH_BOUND_NOFORE") != nullptr;
 
     constexpr int MAP_SIZE = 20;
@@ -120,6 +127,26 @@ int main(int argc, char **argv)
             if (tp->is_done() && disc_time[tp->id] < 0)
                 disc_time[tp->id] = t;
     };
+
+    if (TERRAIN)
+    {
+        // Reveal everything, then take the task knowledge back: put every
+        // non-wall cell's object state back to UNKNOWN and drop the tasks that
+        // the reveal just handed over.  The cost map keeps the true terrain, so
+        // the scheduler knows the layout and nothing about the work.  A task on
+        // a restored cell is re-discovered normally, because update_coords only
+        // fires when the known object lacks the TASK bit.
+        set<Coord> all;
+        for (int x = 0; x < MAP_SIZE; ++x)
+            for (int y = 0; y < MAP_SIZE; ++y)
+                all.emplace(x, y);
+        map.update_coords(all);
+        for (int x = 0; x < MAP_SIZE; ++x)
+            for (int y = 0; y < MAP_SIZE; ++y)
+                if (known_object_map[x][y] != OBJECT::WALL)
+                    known_object_map[x][y] = OBJECT::UNKNOWN;
+        active_tasks.clear();
+    }
 
     while (++time < TIME_MAX &&
            robots.size() != map.get_exhausted_robot_num() &&
@@ -259,6 +286,9 @@ int main(int argc, char **argv)
     cout << seed << "," << NUM_MAX_TASKS << "," << created << "," << discovered
          << "," << completed << "," << map.get_exhausted_robot_num() << "," << time
          << "," << worker_energy << "," << drone_energy << "," << drone_cell_cost << endl;
+
+    if (TERRAIN)
+        return 0; // the CSV line above is the whole result
 
     if (BOUND)
     {
